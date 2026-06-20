@@ -4,27 +4,189 @@ import time
 import numpy as np
 import cv2
 import streamlit as st
-# Ensure the script directory is in the python path for importing
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-# Import core functionalities from qr_benchmark
+# ==========================================
+# CORE DEPENDENCY IMPORTS & HARDWARE DETECTIONS
+# ==========================================
+# Check for PyTorch to see GPU status
 try:
-    from qr_benchmark import (
-        run_cpu_preprocessing,
-        run_gpu_preprocessing,
-        decode_frame,
-        HAS_ZXING,
-        HAS_PYZBAR,
-        HAS_CV_CUDA,
-        HAS_TORCH,
-        GPU_NAME,
-        HAS_PSUTIL,
-        get_cpu_temp
-    )
-except ImportError:
-    st.error("Could not import dependencies from qr_benchmark.py. Ensure qr_benchmark.py is in the same directory.")
-    st.stop()
-if HAS_PSUTIL:
+    import torch
+    HAS_TORCH = True
+    GPU_NAME = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "None"
+except Exception:
+    HAS_TORCH = False
+    GPU_NAME = "None"
+# Check for psutil for system stats
+try:
     import psutil
+    HAS_PSUTIL = True
+except Exception:
+    HAS_PSUTIL = False
+# Check for qrcode library for generating real QR codes
+try:
+    import qrcode
+    HAS_QRCODE = True
+except Exception:
+    HAS_QRCODE = False
+# Import Decoders
+try:
+    import zxingcpp
+    HAS_ZXING = True
+except Exception:
+    HAS_ZXING = False
+try:
+    from pyzbar.pyzbar import decode as zbar_decode
+    HAS_PYZBAR = True
+except Exception:
+    HAS_PYZBAR = False
+# Check OpenCV CUDA availability
+HAS_CV_CUDA = False
+try:
+    if cv2.cuda.getCudaEnabledDeviceCount() > 0:
+        HAS_CV_CUDA = True
+except AttributeError:
+    pass
+# ==========================================
+# CORE UTILITY FUNCTIONS (MERGED FROM BENCHMARK)
+# ==========================================
+def get_cpu_temp():
+    """Retrieves CPU temperature if available on Linux/Jetson."""
+    if sys.platform.startswith('linux'):
+        for i in range(5):
+            path = f"/sys/class/thermal/thermal_zone{i}/temp"
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        temp = float(f.read().strip()) / 1000.0
+                        return f"{temp:.1f}°C"
+                except Exception:
+                    pass
+    return "N/A"
+def run_cpu_preprocessing(gray, orig_w, orig_h):
+    """Runs the 7-pass preprocessing pipeline on CPU."""
+    passes = []
+    
+    # Pass 1: Direct grayscale (unmodified)
+    passes.append(gray)
+    
+    # Pass 2: White padding (restores quiet zones)
+    passes.append(cv2.copyMakeBorder(gray, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    # Pass 3: Resizing (to standard 1200px width) + Padding
+    target_w = 1200
+    scale = target_w / orig_w
+    target_h = int(orig_h * scale)
+    resized = cv2.resize(gray, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+    passes.append(cv2.copyMakeBorder(resized, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255))
+    
+    # Pass 4: Median Blur + Padding
+    median_3 = cv2.medianBlur(gray, 3)
+    passes.append(cv2.copyMakeBorder(median_3, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    # Pass 5: Bilateral Filtering + Padding
+    bilat_5 = cv2.bilateralFilter(gray, 5, 50, 50)
+    passes.append(cv2.copyMakeBorder(bilat_5, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    # Pass 6: CLAHE Contrast Enhancement + Padding
+    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    clahe_img = clahe.apply(gray)
+    passes.append(cv2.copyMakeBorder(clahe_img, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    # Pass 7: Adaptive Threshold + Padding
+    adaptive_thresh = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
+    )
+    passes.append(cv2.copyMakeBorder(adaptive_thresh, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    return passes
+def run_gpu_preprocessing(gray, orig_w, orig_h):
+    """Runs the 7-pass preprocessing pipeline using OpenCV CUDA (GPU)."""
+    gpu_gray = cv2.cuda.GpuMat()
+    gpu_gray.upload(gray)
+    
+    passes = []
+    
+    # Pass 1: Direct grayscale (unmodified) - Download directly
+    passes.append(gpu_gray.download())
+    
+    # Pass 2: White padding
+    gpu_pad2 = cv2.cuda.copyMakeBorder(gpu_gray, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+    passes.append(gpu_pad2.download())
+    
+    # Pass 3: Resizing + Padding
+    target_w = 1200
+    scale = target_w / orig_w
+    target_h = int(orig_h * scale)
+    gpu_resized = cv2.cuda.resize(gpu_gray, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
+    gpu_pad3 = cv2.cuda.copyMakeBorder(gpu_resized, 40, 40, 40, 40, cv2.BORDER_CONSTANT, value=255)
+    passes.append(gpu_pad3.download())
+    
+    # Pass 4: Median Blur (GPU proxy using Gaussian)
+    try:
+        gpu_blur = cv2.cuda.createGaussianFilter(cv2.CV_8UC1, cv2.CV_8UC1, (3, 3), 0.5)
+        gpu_blurred = gpu_blur.apply(gpu_gray)
+        gpu_pad4 = cv2.cuda.copyMakeBorder(gpu_blurred, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        passes.append(gpu_pad4.download())
+    except Exception:
+        median_3 = cv2.medianBlur(gray, 3)
+        passes.append(cv2.copyMakeBorder(median_3, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+        
+    # Pass 5: Bilateral filter
+    try:
+        gpu_bilat = cv2.cuda.bilateralFilter(gpu_gray, 5, 50, 50)
+        gpu_pad5 = cv2.cuda.copyMakeBorder(gpu_bilat, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        passes.append(gpu_pad5.download())
+    except Exception:
+        bilat_5 = cv2.bilateralFilter(gray, 5, 50, 50)
+        passes.append(cv2.copyMakeBorder(bilat_5, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+        
+    # Pass 6: CLAHE
+    try:
+        gpu_clahe = cv2.cuda.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        gpu_clahe_img = gpu_clahe.apply(gpu_gray, cv2.cuda.Stream.Null())
+        gpu_pad6 = cv2.cuda.copyMakeBorder(gpu_clahe_img, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255)
+        passes.append(gpu_pad6.download())
+    except Exception:
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        clahe_img = clahe.apply(gray)
+        passes.append(cv2.copyMakeBorder(clahe_img, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+        
+    # Pass 7: Threshold (CPU fallback)
+    adaptive_thresh = cv2.adaptiveThreshold(
+        gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 5
+    )
+    passes.append(cv2.copyMakeBorder(adaptive_thresh, 30, 30, 30, 30, cv2.BORDER_CONSTANT, value=255))
+    
+    return passes
+def decode_frame(img_passes, engine):
+    """Runs the selected engine on the preprocessed image passes."""
+    if engine == "zxing" and HAS_ZXING:
+        binarizers = [zxingcpp.Binarizer.LocalAverage, zxingcpp.Binarizer.GlobalHistogram]
+        for img_proc in img_passes:
+            for b_type in binarizers:
+                results = zxingcpp.read_barcodes(img_proc, binarizer=b_type)
+                for res in results:
+                    if res.text:
+                        return res.text, f"zxing:{res.format}"
+                        
+    elif engine == "pyzbar" and HAS_PYZBAR:
+        for img_proc in img_passes:
+            decoded_objects = zbar_decode(img_proc)
+            for obj in decoded_objects:
+                qr_data = obj.data.decode('utf-8')
+                if qr_data:
+                    return qr_data, "pyzbar"
+                    
+    elif engine == "opencv":
+        detector = cv2.QRCodeDetector()
+        for img_proc in img_passes:
+            data, bbox, _ = detector.detectAndDecode(img_proc)
+            if data and bbox is not None and len(bbox) > 0:
+                return data, "opencv"
+                
+    return None, None
+# ==========================================
+# STREAMLIT USER INTERFACE
+# ==========================================
 # Page Configuration
 st.set_page_config(
     page_title="Edge AI QR Scanner Benchmark",
@@ -205,7 +367,6 @@ if run_stream:
         # Draw bounding boxes and text overlays on the frame
         frame_disp = frame.copy()
         if data:
-            # Display target indicator on video
             cv2.putText(
                 frame_disp, 
                 "QR DETECTED", 
@@ -216,10 +377,8 @@ if run_stream:
                 3, 
                 cv2.LINE_AA
             )
-            # Find QR coordinate box if we want, or just draw corner highlights
             cv2.rectangle(frame_disp, (10, 10), (orig_w - 10, orig_h - 10), (0, 255, 0), 4)
             
-        # Draw HUD overlays on frame
         cv2.putText(
             frame_disp, 
             f"FPS: {fps:.1f} ({selected_engine.upper()})", 
@@ -286,7 +445,6 @@ if run_stream:
         # Draw moving chart
         chart_placeholder.line_chart(latency_history, height=180)
         
-        # Tiny delay to prevent blocking system context
         time.sleep(0.01)
         
     cap.release()
@@ -301,14 +459,14 @@ else:
     #### 🟢 On Raspberry Pi 5 (CPU-Optimized)
     Run the following command in your terminal:
     ```bash
-    streamlit run qr_benchmark_app.py
+    streamlit run qr.py
     ```
     - The Pi 5's high-clocked CPU cores (2.4 GHz) will display fast single-thread decodes and handle CPU preprocessing in about **45–60 ms**.
     
     #### 🔵 On NVIDIA Jetson Orin Nano (CUDA-Accelerated)
     Run the following command in your terminal:
     ```bash
-    streamlit run qr_benchmark_app.py
+    streamlit run qr.py
     ```
     - Make sure to enable the **GPU Preprocessing (CUDA)** checkbox in the sidebar. This will offload the heavy multi-pass preprocessing filters to Jetson's Ampere GPU, dropping preprocessing latency down to **8–15 ms**!
     """)
