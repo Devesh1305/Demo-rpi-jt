@@ -1,3 +1,1 @@
-(venv) gitam@Gitam-Nano:~/mnt/storage/demo/FRS/FRS$ pip install face-recognitionJetson.GPIO
-ERROR: Could not find a version that satisfies the requirement face-recognitionJetson.GPIO (from versions: none)
-ERROR: No matching distribution found for face-recognitionJetson.GPIO
+pip install face-recognition Jetson.GPIO
