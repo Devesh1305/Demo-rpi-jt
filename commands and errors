@@ -1,64 +1,389 @@
-import os
-import glob
-import face_recognition
-import pickle
+import streamlit as st
 import cv2
-# Check for CUDA acceleration in dlib
-use_gpu = False
+import numpy as np
+import time
+import pickle
+import threading
+import os
+from datetime import datetime
+from camera import CameraStream
+import face_recognition
+# Set up Streamlit Page Configuration
+st.set_page_config(
+    page_title="AURA-Net Facial Recognition Hub",
+    page_icon="⚡",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+# Custom Cyberpunk/Dark-Mode CSS Styling (Glassmorphism & Neon accents)
+st.markdown("""
+<style>
+    /* Dark Slate Background */
+    .stApp {
+        background-color: #0B0C10;
+        color: #C5C6C7;
+        font-family: 'Outfit', sans-serif;
+    }
+    
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #1F2833;
+        border-right: 2px solid #66FCF1;
+    }
+    
+    /* Glowing Title */
+    .glowing-title {
+        color: #66FCF1;
+        font-size: 3rem;
+        font-weight: 800;
+        text-align: center;
+        text-shadow: 0 0 10px rgba(102, 252, 241, 0.5), 0 0 20px rgba(102, 252, 241, 0.3);
+        margin-bottom: 20px;
+    }
+    
+    /* Status Cards */
+    .metric-card {
+        background: rgba(31, 40, 51, 0.65);
+        border: 1px solid rgba(102, 252, 241, 0.2);
+        border-radius: 12px;
+        padding: 20px;
+        text-align: center;
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(5px);
+        margin: 10px 0;
+    }
+    .metric-value {
+        font-size: 2.2rem;
+        font-weight: 700;
+        color: #66FCF1;
+    }
+    .metric-label {
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 2px;
+        color: #8D99AE;
+        margin-top: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
+# App Title
+st.markdown("<h1 class='glowing-title'>⚡ AURA-NET FACIAL SCANNER</h1>", unsafe_allow_html=True)
+# ----------------- SESSION STATE CACHING -----------------
+# Load encodings once
+@st.cache_resource
+def load_encodings():
+    try:
+        with open("encodings.pickle", "rb") as f:
+            data = pickle.loads(f.read())
+        return data["encodings"], data["names"]
+    except FileNotFoundError:
+        return [], []
+known_face_encodings, known_face_names = load_encodings()
+if len(known_face_names) == 0:
+    st.error("No facial encodings found! Please run the training script first.")
+    st.stop()
+# Initialize CameraStream in Session State to prevent re-opening on rerun
+if "camera" not in st.session_state:
+    # use_csi=False for USB webcams, switch to True if using CSI camera on Jetson
+    st.session_state.camera = CameraStream(src=0, width=640, height=480, fps=30, use_csi=False).start()
+# Initialize shared recognition state in Session State
+if "shared_results" not in st.session_state:
+    st.session_state.shared_results = {
+        "locations": [],
+        "names": [],
+        "distances": [],
+        "processing_time": 0.0
+    }
+    st.session_state.results_lock = threading.Lock()
+    st.session_state.worker_running = True
+# Initialize Log Buffer
+if "detection_log" not in st.session_state:
+    st.session_state.detection_log = [] # List of dicts (name, timestamp, confidence, thumbnail)
+# ----------------- SIDEBAR CONTROLS -----------------
+st.sidebar.markdown("### 🛠️ SYSTEM RADAR SETTINGS")
+cv_scaler = st.sidebar.slider("Resolution Downscaler", min_value=2, max_value=8, value=4, step=1, 
+                              help="Higher reduces CPU usage but lowers detection range.")
+tolerance = st.sidebar.slider("Recognition Strictness (Distance)", min_value=0.3, max_value=0.8, value=0.6, step=0.05, 
+                              help="Lower is stricter (fewer false positives).")
+use_csi = st.sidebar.checkbox("Using Jetson CSI Camera?", value=False, 
+                              help="Check this if using a ribbon CSI Camera (restarts camera stream).")
+# Restart camera if use_csi toggle is changed
+if "prev_use_csi" in st.session_state and st.session_state.prev_use_csi != use_csi:
+    st.session_state.camera.stop()
+    st.session_state.camera = CameraStream(src=0, width=640, height=480, fps=30, use_csi=use_csi).start()
+st.session_state.prev_use_csi = use_csi
+# List of authorized names for trigger simulation
+authorized_names = st.sidebar.multiselect("Authorized Personnel", options=list(set(known_face_names)), default=list(set(known_face_names)))
+st.sidebar.markdown("---")
+st.sidebar.markdown("### 🚦 SYSTEM METRICS")
+model_type = "CNN (CUDA)"
 try:
     import dlib
-    if hasattr(dlib, 'DLIB_USE_CUDA') and dlib.DLIB_USE_CUDA:
-        use_gpu = True
-        print("[INFO] GPU Acceleration detected! Using CUDA-enabled dlib for training.")
-    else:
-        print("[INFO] No GPU Acceleration found in dlib. Running face detection on CPU.")
-except Exception as e:
-    print(f"[WARNING] Could not check dlib CUDA status: {e}. Defaulting to CPU.")
-# Set optimal model
-detection_model = "cnn" if use_gpu else "hog"
-print(f"[INFO] Face detection model set to: '{detection_model.upper()}'")
-print("[INFO] start processing faces...")
-# Find all .jpg, .jpeg, and .png images inside dataset folders
-imagePaths = []
-for ext in ('*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG'):
-    imagePaths.extend(glob.glob(os.path.join("dataset", "**", ext), recursive=True))
-if len(imagePaths) == 0:
-    print("[ERROR] No training images found in 'dataset/'. Please run image_capture.py first.")
-    exit(1)
-knownEncodings = []
-knownNames = []
-for (i, imagePath) in enumerate(imagePaths):
-    print(f"[INFO] processing image {i + 1}/{len(imagePaths)}: {imagePath}")
+    if not (hasattr(dlib, 'DLIB_USE_CUDA') and dlib.DLIB_USE_CUDA):
+        model_type = "HOG (CPU)"
+except Exception:
+    model_type = "CPU"
+st.sidebar.info(f"Active Model: **{model_type}**")
+# ----------------- RECOGNITION BACKGROUND WORKER -----------------
+def recognition_loop():
+    camera = st.session_state.camera
+    shared = st.session_state.shared_results
+    lock = st.session_state.results_lock
     
-    # Extract person name from folder structure
-    name = imagePath.split(os.path.sep)[-2]
+    detection_model = "cnn" if "CNN" in model_type else "hog"
     
-    image = cv2.imread(imagePath)
-    if image is None:
-        print(f"[WARNING] Could not read image: {imagePath}")
+    while st.session_state.worker_running:
+        ret, frame = camera.read()
+        if not ret or frame is None:
+            time.sleep(0.01)
+            continue
+            
+        start_time = time.time()
+        
+        # Performance resizing
+        resized = cv2.resize(frame, (0, 0), fx=(1/cv_scaler), fy=(1/cv_scaler))
+        rgb_resized = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        
+        # Run detection & encoding
+        # Try CNN, fallback to HOG if OOM occurs
+        try:
+            face_locations = face_recognition.face_locations(rgb_resized, model=detection_model)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() and detection_model == "cnn":
+                face_locations = face_recognition.face_locations(rgb_resized, model="hog")
+            else:
+                face_locations = []
+                
+        face_encodings = face_recognition.face_encodings(rgb_resized, face_locations)
+        
+        face_names = []
+        face_distances = []
+        
+        for face_encoding in face_encodings:
+            matches = face_recognition.compare_faces(known_face_encodings, face_encoding, tolerance=tolerance)
+            name = "Unknown"
+            best_dist = 1.0
+            
+            distances = face_recognition.face_distance(known_face_encodings, face_encoding)
+            if len(distances) > 0:
+                best_match_idx = np.argmin(distances)
+                best_dist = distances[best_match_idx]
+                if matches[best_match_idx]:
+                    name = known_face_names[best_match_idx]
+                    
+            face_names.append(name)
+            face_distances.append(best_dist)
+            
+            # Log new detections to session state (throttled to once every 3 seconds per person)
+            if name != "Unknown":
+                now = datetime.now()
+                last_logged = [x for x in st.session_state.detection_log if x["name"] == name]
+                if not last_logged or (now - last_logged[-1]["time"]).total_seconds() > 3.0:
+                    # Save a thumbnail of the detected face
+                    try:
+                        # Scale coordinates back up to original frame
+                        top, right, bottom, left = face_locations[len(face_names)-1]
+                        top, right, bottom, left = top * cv_scaler, right * cv_scaler, bottom * cv_scaler, left * cv_scaler
+                        face_crop = frame[max(0, top-20):min(480, bottom+20), max(0, left-20):min(640, right+20)]
+                        
+                        # Encode to jpg bytes for web display
+                        _, encoded_img = cv2.imencode('.jpg', face_crop)
+                        thumb_bytes = encoded_img.tobytes()
+                    except Exception:
+                        thumb_bytes = None
+                        
+                    st.session_state.detection_log.insert(0, {
+                        "name": name,
+                        "time": now,
+                        "confidence": f"{max(0, int((1.0 - best_dist) * 100))}%",
+                        "status": "APPROVED" if name in authorized_names else "BLOCKED",
+                        "thumbnail": thumb_bytes
+                    })
+                    
+                    # Limit log length to 20
+                    if len(st.session_state.detection_log) > 20:
+                        st.session_state.detection_log.pop()
+        
+        latency = time.time() - start_time
+        
+        with lock:
+            shared["locations"] = face_locations
+            shared["names"] = face_names
+            shared["distances"] = face_distances
+            shared["processing_time"] = latency
+            
+        time.sleep(0.02)
+# Start recognition worker thread if not running
+if "worker_thread" not in st.session_state:
+    st.session_state.worker_thread = threading.Thread(target=recognition_loop, args=())
+    st.session_state.worker_thread.daemon = True
+    st.session_state.worker_thread.start()
+# ----------------- MAIN LAYOUT -----------------
+col1, col2 = st.columns([2, 1])
+# Layout Frame Calculation
+frame_placeholder = col1.empty()
+# Dashboard Cards
+metric_col1, metric_col2, metric_col3 = col2.columns(3)
+with metric_col1:
+    fps_placeholder = st.empty()
+with metric_col2:
+    latency_placeholder = st.empty()
+with metric_col3:
+    status_placeholder = st.empty()
+col2.markdown("### 📊 AUDIT EVENT LOG")
+log_placeholder = col2.empty()
+# Draw HUD Scanning Bracket on Face Bounding Box (Wow factor)
+def draw_sci_fi_hud(img, left, top, right, bottom, name, confidence, authorized):
+    color = (240, 230, 20) if authorized else (30, 30, 240) # Neon Cyan (B,G,R) vs Neon Red
+    
+    # Bounding Box Corners (futuristic HUD look)
+    length = 20
+    thickness = 3
+    
+    # Draw corners
+    # Top-Left
+    cv2.line(img, (left, top), (left + length, top), color, thickness)
+    cv2.line(img, (left, top), (left, top + length), color, thickness)
+    # Top-Right
+    cv2.line(img, (right, top), (right - length, top), color, thickness)
+    cv2.line(img, (right, top), (right, top + length), color, thickness)
+    # Bottom-Left
+    cv2.line(img, (left, bottom), (left + length, bottom), color, thickness)
+    cv2.line(img, (left, bottom), (left, bottom - length), color, thickness)
+    # Bottom-Right
+    cv2.line(img, (right, bottom), (right - length, bottom), color, thickness)
+    cv2.line(img, (right, bottom), (right, bottom - length), color, thickness)
+    
+    # Subtly fill face area with alpha mask
+    face_roi = img[top:bottom, left:right]
+    overlay = face_roi.copy()
+    cv2.rectangle(overlay, (0, 0), (right - left, bottom - top), color, -1)
+    # Blending frame
+    cv2.addWeighted(overlay, 0.08, face_roi, 0.92, 0, face_roi)
+    
+    # HUD details - Target reticle lines
+    cv2.drawMarker(img, (int((left+right)/2), int((top+bottom)/2)), color, cv2.MARKER_CROSS, 15, 1)
+    
+    # Hologram Text Labels
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 0.55
+    text_color = (255, 255, 255)
+    
+    # Status Tag
+    tag = "ACCESS APPROVED" if authorized else "WARNING: UNKNOWN"
+    cv2.putText(img, f"ID: {name.upper()}", (left, top - 25), font, font_scale, color, 2)
+    cv2.putText(img, f"MATCH: {confidence}", (left, top - 8), font, font_scale, text_color, 1)
+    cv2.putText(img, tag, (left, bottom + 18), font, 0.45, color, 1)
+# Stream Rendering Loop (runs in main thread)
+fps_start_time = time.time()
+frame_count = 0
+while True:
+    ret, frame = st.session_state.camera.read()
+    if not ret or frame is None:
+        time.sleep(0.01)
         continue
         
-    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    frame_count += 1
     
-    # Detect faces using selected model, with automatic fallback to HOG on GPU OOM
-    try:
-        boxes = face_recognition.face_locations(rgb, model=detection_model)
-    except RuntimeError as e:
-        if "out of memory" in str(e).lower() and detection_model == "cnn":
-            print("[WARNING] CUDA Out of Memory with CNN. Falling back to CPU 'HOG' model for this image.")
-            boxes = face_recognition.face_locations(rgb, model="hog")
-        else:
-            raise e
+    # Copy latest results from worker thread safely
+    with st.session_state.results_lock:
+        locations = list(st.session_state.shared_results["locations"])
+        names = list(st.session_state.shared_results["names"])
+        distances = list(st.session_state.shared_results["distances"])
+        inference_latency = st.session_state.shared_results["processing_time"]
+        
+    # Draw Sci-Fi HUD overlays on detected faces
+    auth_in_frame = False
+    for i, ((top, right, bottom, left), name) in enumerate(zip(locations, names)):
+        # Scale back up coordinate locations
+        top *= cv_scaler
+        right *= cv_scaler
+        bottom *= cv_scaler
+        left *= cv_scaler
+        
+        dist = distances[i]
+        confidence = f"{max(0, int((1.0 - dist) * 100))}%"
+        
+        is_auth = name in authorized_names
+        if is_auth:
+            auth_in_frame = True
+            
+        draw_sci_fi_hud(frame, left, top, right, bottom, name, confidence, is_auth)
+        
+    # Draw futuristic UI overlays on the main frame
+    h, w, _ = frame.shape
+    # Scanning laser animation
+    scan_line_y = int((time.time() * 100) % h)
+    cv2.line(frame, (10, scan_line_y), (w - 10, scan_line_y), (102, 252, 241), 1)
     
-    # Compute the 128-d face encodings
-    encodings = face_recognition.face_encodings(rgb, boxes)
+    # Outer Scanner Border
+    cv2.rectangle(frame, (10, 10), (w - 10, h - 10), (102, 252, 241), 1)
     
-    for encoding in encodings:
-        knownEncodings.append(encoding)
-        knownNames.append(name)
-print("[INFO] serializing encodings...")
-data = {"encodings": knownEncodings, "names": knownNames}
-with open("encodings.pickle", "wb") as f:
-    f.write(pickle.dumps(data))
-print(f"[INFO] Training complete. Processed {len(imagePaths)} images.")
-print(f"[INFO] Encodings saved to 'encodings.pickle' (Total faces indexed: {len(knownNames)})")
+    # Convert image to RGB for Streamlit rendering
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    frame_placeholder.image(rgb_frame, channels="RGB", use_container_width=True)
+    
+    # Telemetry Updates
+    current_time = time.time()
+    elapsed = current_time - fps_start_time
+    if elapsed >= 1.0:
+        display_fps = frame_count / elapsed
+        frame_count = 0
+        fps_start_time = current_time
+        
+        fps_placeholder.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-value'>{display_fps:.1f}</div>
+            <div class='metric-label'>Display FPS</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        latency_placeholder.markdown(f"""
+        <div class='metric-card'>
+            <div class='metric-value'>{inference_latency*1000:.0f}ms</div>
+            <div class='metric-label'>Scan Latency</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        status_color = "#66FCF1" if auth_in_frame else "#FF4B4B"
+        status_txt = "ACCESS" if auth_in_frame else "SECURE"
+        status_placeholder.markdown(f"""
+        <div class='metric-card' style='border-color: {status_color}'>
+            <div class='metric-value' style='color: {status_color}'>{status_txt}</div>
+            <div class='metric-label'>System state</div>
+        </div>
+        """, unsafe_allow_html=True)
+    # Render Logging Audit Log Table
+    log_data = []
+    for entry in st.session_state.detection_log[:8]:
+        status_tag = f"<span style='color:#66FCF1; font-weight:bold;'>APPROVED</span>" if entry["status"] == "APPROVED" else f"<span style='color:#FF4B4B; font-weight:bold;'>BLOCKED</span>"
+        time_str = entry["time"].strftime("%H:%M:%S")
+        log_data.append(f"""
+        <tr style='border-bottom: 1px solid rgba(255,255,255,0.05);'>
+            <td style='padding: 8px;'><b>{entry['name'].upper()}</b></td>
+            <td style='padding: 8px;'>{time_str}</td>
+            <td style='padding: 8px;'>{entry['confidence']}</td>
+            <td style='padding: 8px;'>{status_tag}</td>
+        </tr>
+        """)
+        
+    log_table_html = f"""
+    <div style='background: rgba(31, 40, 51, 0.65); border: 1px solid rgba(102, 252, 241, 0.15); border-radius: 8px; padding: 10px; height: 310px; overflow-y: auto;'>
+        <table style='width:100%; border-collapse: collapse; text-align: left; font-size: 0.85rem; color: #C5C6C7;'>
+            <thead>
+                <tr style='border-bottom: 2px solid #66FCF1; color: #8D99AE;'>
+                    <th style='padding: 8px;'>NAME</th>
+                    <th style='padding: 8px;'>TIME</th>
+                    <th style='padding: 8px;'>MATCH</th>
+                    <th style='padding: 8px;'>STATUS</th>
+                </tr>
+            </thead>
+            <tbody>
+                {"".join(log_data) if log_data else "<tr><td colspan='4' style='text-align:center; padding:20px; color:#555;'>AURA-Radar scanning active... No detections recorded.</td></tr>"}
+            </tbody>
+        </table>
+    </div>
+    """
+    log_placeholder.markdown(log_table_html, unsafe_allow_html=True)
+    
+    time.sleep(0.03) # Frame rate cap (~30 FPS rendering)
