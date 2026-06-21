@@ -1,1 +1,12 @@
-
+File "/home/gitam/mnt/storage/demo/hands/venv/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/exec_code.py", line 129, in exec_func_with_error_handling
+    result = func()
+File "/home/gitam/mnt/storage/demo/hands/venv/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/script_runner.py", line 789, in code_to_exec
+    exec(code, module.__dict__)  # noqa: S102
+File "/home/gitam/mnt/storage/demo/hands/hands.py", line 7, in <module>
+    import cv2
+File "/home/gitam/mnt/storage/demo/hands/venv/lib/python3.10/site-packages/cv2/__init__.py", line 181, in <module>
+    bootstrap()
+File "/home/gitam/mnt/storage/demo/hands/venv/lib/python3.10/site-packages/cv2/__init__.py", line 153, in bootstrap
+    native_module = importlib.import_module("cv2")
+File "/usr/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
