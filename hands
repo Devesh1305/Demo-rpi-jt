@@ -1,6 +1,7 @@
 import sys
 # Prevent MediaPipe from attempting to load global TensorFlow which causes Protobuf conflicts
 sys.modules['tensorflow'] = None
+
 import os
 import time
 import math
@@ -10,6 +11,7 @@ import numpy as np
 import cv2
 import streamlit as st
 import mediapipe as mp
+
 # ==========================================
 # THREADED LOW-LATENCY CAMERA CAPTURE PIPELINE
 # ==========================================
@@ -34,6 +36,7 @@ class USBWebcamPipe:
         self.is_running = True
         self.thread = threading.Thread(target=self._reader_thread, daemon=True)
         self.thread.start()
+
     def _reader_thread(self):
         while self.is_running:
             ret, frame = self.cap.read()
@@ -42,13 +45,16 @@ class USBWebcamPipe:
                 continue
             with self.lock:
                 self.latest_frame = frame
+
     def get_latest_frame(self):
         with self.lock:
             return self.latest_frame.copy() if self.latest_frame is not None else None
+
     def close(self):
         self.is_running = False
         if self.cap.isOpened():
             self.cap.release()
+
 # ==========================================
 # HARDWARE UTILITY FUNCTIONS
 # ==========================================
@@ -65,6 +71,7 @@ def get_cpu_temp():
                 except Exception:
                     pass
     return "38.5°C (Simulated)"
+
 def get_jetson_stats():
     """Retrieves system performance stats on Jetson or falls back gracefully."""
     stats = {"cpu_util": "N/A", "gpu_util": "N/A", "ram_util": "N/A", "power_mode": "N/A"}
@@ -122,6 +129,7 @@ def get_jetson_stats():
         stats["power_mode"] = "MODE_15W"
         
     return stats
+
 # ==========================================
 # PAGE CONFIGURATION & THEMING
 # ==========================================
@@ -131,6 +139,7 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
 # Sidebar controls
 st.sidebar.markdown("<h3 style='color: #a29bfe; margin-top: 0;'>🎨 UI Customization</h3>", unsafe_allow_html=True)
 theme_accent = st.sidebar.selectbox(
@@ -145,6 +154,7 @@ accent_hex = {
     "Golden Amber": "#f1c40f",
     "Sunset Coral": "#e17055"
 }[theme_accent]
+
 # Custom Premium CSS Styling (Glassmorphism, Dark UI, Custom Font)
 st.markdown(f"""
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
@@ -225,9 +235,11 @@ st.markdown(f"""
         }}
     </style>
 """, unsafe_allow_html=True)
+
 # App Title & Header
 st.markdown("<h1 class='highlight-header'>Jetson Gesture Intelligence Engine 🖐️⚡</h1>", unsafe_allow_html=True)
 st.markdown("<p style='text-align: center; color: #a0a0a5; font-size: 15px;'>Real-time Dual-Hand Recognition and Gesture Actions optimized for NVIDIA Jetson Orin Nano.</p>", unsafe_allow_html=True)
+
 # ==========================================
 # GESTURE GEOMETRIC CLASSIFIER
 # ==========================================
@@ -238,11 +250,13 @@ def classify_gesture(lm, hand_label="Right"):
     middle_up = lm[12].y < lm[10].y
     ring_up = lm[16].y < lm[14].y
     pinky_up = lm[20].y < lm[18].y
+
     # Thumb logic: check if extended away horizontally from index base (5)
     if hand_label == "Right":
         thumb_up = lm[4].x > lm[3].x and lm[4].x > lm[2].x
     else:
         thumb_up = lm[4].x < lm[3].x and lm[4].x < lm[2].x
+
     # 1. Fist: All closed
     if not thumb_up and not index_up and not middle_up and not ring_up and not pinky_up:
         return "Fist", "✊"
@@ -265,7 +279,9 @@ def classify_gesture(lm, hand_label="Right"):
     # 7. Pointer: Only index open
     if index_up and not middle_up and not ring_up and not pinky_up:
         return "Pointer", "☝️"
+
     return "Unknown", "🤔"
+
 # ==========================================
 # SIDEBAR SETTINGS & STATS
 # ==========================================
@@ -274,11 +290,13 @@ st.sidebar.markdown("<h3 style='color: #0984e3;'>📹 Video Pipeline</h3>", unsa
 camera_idx = st.sidebar.number_input("USB Webcam Device Index", min_value=0, max_value=5, value=0, step=1)
 max_hands = st.sidebar.slider("Maximum Trackable Hands", min_value=1, max_value=2, value=2)
 mirror_view = st.sidebar.checkbox("Mirror Video View", value=True)
+
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='color: #6c5ce7;'>🔬 Model Config</h3>", unsafe_allow_html=True)
 min_detection_confidence = st.sidebar.slider("Detection Confidence", min_value=0.5, max_value=1.0, value=0.75, step=0.05)
 min_tracking_confidence = st.sidebar.slider("Tracking Confidence", min_value=0.5, max_value=1.0, value=0.60, step=0.05)
 inference_skip = st.sidebar.slider("Inference Skip Interval", min_value=1, max_value=5, value=2, step=1, help="Skips landmark extraction on N-1 frames to boost FPS.")
+
 # Hardware Monitor HUD
 st.sidebar.markdown("---")
 st.sidebar.markdown("<h3 style='color: #e84393;'>⚡ Jetson Monitor</h3>", unsafe_allow_html=True)
@@ -288,6 +306,7 @@ st.sidebar.text(f"CPU Usage:     {hw_stats['cpu_util']}")
 st.sidebar.text(f"GPU Usage:     {hw_stats['gpu_util']}")
 st.sidebar.text(f"RAM Usage:     {hw_stats['ram_util']}")
 st.sidebar.text(f"Power Mode:    {hw_stats['power_mode']}")
+
 # ==========================================
 # LAZY INITIALIZATION OF MEDIAPIPE MODELS
 # ==========================================
@@ -300,9 +319,11 @@ def load_hands_model(min_det, min_track, max_h):
         min_detection_confidence=min_det,
         min_tracking_confidence=min_track
     )
+
 hands = load_hands_model(min_detection_confidence, min_tracking_confidence, max_hands)
 mp_draw = mp.solutions.drawing_utils
 mp_hands_conn = mp.solutions.hands.HAND_CONNECTIONS
+
 # ==========================================
 # APP LAYOUT TABS
 # ==========================================
@@ -311,6 +332,7 @@ tab_live, tab_catalog, tab_inspector = st.tabs([
     "📖 Gesture Library Catalog",
     "🔬 3D Landmark Inspector"
 ])
+
 # Initialize session states
 if 'snapshots' not in st.session_state:
     st.session_state.snapshots = []
@@ -328,6 +350,7 @@ if 'hand_velocity' not in st.session_state:
     st.session_state.hand_velocity = 0
 if 'landmark_data' not in st.session_state:
     st.session_state.landmark_data = None
+
 # RPS Game Session States
 if 'rps_state' not in st.session_state:
     st.session_state.rps_state = 'idle'  # 'idle', 'countdown', 'reveal'
@@ -341,6 +364,7 @@ if 'rps_result_text' not in st.session_state:
     st.session_state.rps_result_text = ""
 if 'rps_ai_gesture' not in st.session_state:
     st.session_state.rps_ai_gesture = ""
+
 # ==========================================
 # TAB 1: LIVE GESTURE SCANNER
 # ==========================================
@@ -353,6 +377,7 @@ with tab_live:
             st.session_state.rps_state = 'countdown'
             st.session_state.rps_countdown_start = time.perf_counter()
             st.toast("RPS Round started! Prepare your hand gesture ✊, 🖐️, or ✌️!")
+
     col_feed, col_hud = st.columns([5, 3])
     
     with col_feed:
@@ -389,16 +414,20 @@ with tab_live:
         # Action Log Overlay
         st.markdown("### ⚡ Live Trigger Events")
         trigger_placeholder = st.empty()
+
     WIDTH, HEIGHT = 640, 480
+
     if run_stream:
         if 'current_camera_idx' not in st.session_state:
             st.session_state.current_camera_idx = camera_idx
+
         # Re-initialize camera pipe if changed or not present
         if st.session_state.current_camera_idx != camera_idx or 'cam' not in st.session_state or st.session_state.cam is None:
             if 'cam' in st.session_state and st.session_state.cam is not None:
                 st.session_state.cam.close()
             st.session_state.cam = USBWebcamPipe(camera_idx=camera_idx, width=WIDTH, height=HEIGHT)
             st.session_state.current_camera_idx = camera_idx
+
         cam = st.session_state.cam
         fps_history = []
         last_time = time.perf_counter()
@@ -411,6 +440,7 @@ with tab_live:
                 
             if mirror_view:
                 frame = cv2.flip(frame, 1)
+
             h, w = frame.shape[:2]
             
             # 1. Update Game State Machine
@@ -441,6 +471,7 @@ with tab_live:
             
             if 'last_results' not in st.session_state:
                 st.session_state.last_results = None
+
             # Process hand detection if not paused
             if not st.session_state.paused:
                 if st.session_state.frame_counter % inference_skip == 0 or st.session_state.last_results is None:
@@ -537,7 +568,7 @@ with tab_live:
                     
                     # Landmarks Connect
                     mp_draw.draw_landmarks(
-                        frame, hand_landmarks, mp_draw.HAND_CONNECTIONS,
+                        frame, hand_landmarks, mp_hands_conn,
                         mp_draw.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2),
                         mp_draw.DrawingSpec(color=tuple(int(accent_hex[i:i+2], 16) for i in (5, 3, 1)), thickness=2)
                     )
@@ -548,6 +579,7 @@ with tab_live:
                         frame, f"{hand_label}: {gesture} {emoji}", (x_wrist - 30, y_wrist + 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA
                     )
+
             # 3. Handle RPS Game Reveal State
             if st.session_state.rps_state == 'reveal':
                 # Check what user is doing
@@ -629,6 +661,7 @@ with tab_live:
             # 4. Compress to JPEG and Stream over WebSockets
             _, jpeg_buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             video_placeholder.image(jpeg_buffer.tobytes(), use_container_width=True)
+
             # Timing & FPS tracking
             now = time.perf_counter()
             fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0
@@ -638,6 +671,7 @@ with tab_live:
                 fps_history.pop(0)
             avg_fps = np.mean(fps_history)
             st.session_state.fps_history = fps_history
+
             # Update Metrics placeholders
             fps_placeholder.markdown(f"""
                 <div class="metric-container">
@@ -655,6 +689,7 @@ with tab_live:
                     <div class="metric-sub">Multi-handedness index tracking</div>
                 </div>
             """, unsafe_allow_html=True)
+
             gesture_output_placeholder.markdown(f"""
                 <div class="gesture-card">
                     <div class="gesture-emoji">{primary_emoji}</div>
@@ -662,12 +697,14 @@ with tab_live:
                     <div style="font-size: 12px; color: #a0a0a5; margin-top: 5px;">Primary Hand Gesture</div>
                 </div>
             """, unsafe_allow_html=True)
+
             # RPS Game Card
             status_text = "Waiting to play..."
             if st.session_state.rps_state == 'countdown':
                 status_text = "GET READY!"
             elif st.session_state.rps_state == 'completed':
                 status_text = f"AI Gesture: {st.session_state.rps_ai_gesture}"
+
             rps_card_placeholder.markdown(f"""
                 <div style="background: rgba(255, 255, 255, 0.02); border-radius: 10px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
                     <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 8px;">
@@ -689,22 +726,27 @@ with tab_live:
                 active_events.append("📸 Saving Camera Snapshot")
             if st.session_state.get('hand_velocity', 0) > 1000:
                 active_events.append("💨 Fast Motion Detected!")
+
             events_str = "<br>".join([f"• {ev}" for ev in active_events]) if active_events else "• No active trigger events"
             trigger_placeholder.markdown(f"""
                 <div style="background: rgba(255, 255, 255, 0.01); border-radius: 8px; padding: 10px; border: 1px dashed rgba(255,255,255,0.1); font-size: 13px; color: #d1d1d6; line-height: 1.6;">
                     {events_str}
                 </div>
             """, unsafe_allow_html=True)
+
             # Trigger balloons outside lock to prevent lagging
             if st.session_state.trigger_balloons:
                 st.session_state.trigger_balloons = False
                 st.balloons()
+
             time.sleep(0.001)
+
     else:
         st.info("💡 Start the webcam pipeline using the checkbox in the control panel.")
         if 'cam' in st.session_state and st.session_state.cam is not None:
             st.session_state.cam.close()
             st.session_state.cam = None
+
 # ==========================================
 # TAB 2: GESTURE CATALOG
 # ==========================================
@@ -755,6 +797,7 @@ with tab_catalog:
             <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> Thumb and Index tips touch, others open.</p>
         </div>
         """, unsafe_allow_html=True)
+
 # ==========================================
 # TAB 3: LANDMARK INSPECTOR
 # ==========================================
