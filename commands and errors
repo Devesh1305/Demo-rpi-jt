@@ -1,14 +1,30 @@
-venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ pip install --upgrade pip
-Requirement already satisfied: pip in ./venv/lib/python3.10/site-packages (22.0.2)
-Collecting pip
-  Downloading pip-26.1.2-py3-none-any.whl (1.8 MB)
-     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 1.4 MB/s eta 0:00:00
-Installing collected packages: pip
-  Attempting uninstall: pip
-    Found existing installation: pip 22.0.2
-    Uninstalling pip-22.0.2:
-      Successfully uninstalled pip-22.0.2
-Successfully installed pip-26.1.2
-(venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ pip install meadiapipe
-ERROR: Could not find a version that satisfies the requirement meadiapipe (from versions: none)
-ERROR: No matching distribution found for meadiapipe
+ERROR: pip's dependency resolver does not currently take into account all the packages that are installed. This behaviour is the source of the following dependency conflicts.
+tensorflow 2.21.0 requires protobuf<8.0.0,>=6.31.1, but you have protobuf 4.25.9 which is incompatible.
+Successfully installed cffi-2.0.0 jax-0.6.2 jaxlib-0.6.2 mediapipe-0.10.18 protobuf-4.25.9 pycparser-3.0 sentencepiece-0.2.1 sounddevice-0.5.5
+(venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ streamlit run hands.py --server.port 8502 --server.address 0.0.0.0
+2026-06-21 18:23:23.399 Uvicorn server started on 0.0.0.0:8502
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8502
+  Network URL: http://192.168.1.215:8502
+
+────────────────────────── Traceback (most recent call last) ───────────────────────────
+  /home/gitam/.local/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/exec_  
+  code.py:129 in exec_func_with_error_handling                                          
+                                                                                        
+  /home/gitam/.local/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/scrip  
+  t_runner.py:789 in code_to_exec                                                       
+                                                                                        
+  /home/gitam/mnt/storage/demo/hands/hands.py:10 in <module>                            
+                                                                                        
+      7 import numpy as np                                                              
+      8 import cv2                                                                      
+      9 import streamlit as st                                                          
+  ❱  10 import mediapipe as mp                                                          
+     11 # ==========================================                                    
+     12 # THREADED LOW-LATENCY CAMERA CAPTURE PIPELINE                                  
+     13 # ==========================================                                    
+────────────────────────────────────────────────────────────────────────────────────────
+ModuleNotFoundError: No module named 'mediapipe'
+^C  Stopping...
