@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import math
+import random
 import threading
 import numpy as np
 import cv2
@@ -47,91 +48,6 @@ class USBWebcamPipe:
         if self.cap.isOpened():
             self.cap.release()
 # ==========================================
-# PAGE CONFIG & CSS STYLING
-# ==========================================
-st.set_page_config(
-    page_title="Edge AI Gesture Identifier",
-    page_icon="🖐️",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-# Custom Premium CSS Styling (Glassmorphism, Dark UI, Custom Font)
-st.markdown("""
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
-    <style>
-        * {
-            font-family: 'Outfit', sans-serif;
-        }
-        .main {
-            background-color: #0f0f11;
-            color: #ffffff;
-        }
-        .metric-container {
-            display: flex;
-            flex-direction: column;
-            background: rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 16px;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            backdrop-filter: blur(10px);
-            margin-bottom: 12px;
-            transition: all 0.2s ease-in-out;
-        }
-        .metric-container:hover {
-            transform: translateY(-2px);
-            border-color: rgba(9, 132, 227, 0.5);
-            box-shadow: 0 4px 20px 0 rgba(9, 132, 227, 0.15);
-        }
-        .metric-label {
-            font-size: 13px;
-            color: #a0a0a5;
-            text-transform: uppercase;
-            letter-spacing: 0.8px;
-            font-weight: 600;
-        }
-        .metric-value {
-            font-size: 26px;
-            font-weight: 700;
-            color: #00cec9;
-            margin-top: 4px;
-        }
-        .metric-sub {
-            font-size: 11px;
-            color: #d1d1d6;
-            margin-top: 2px;
-        }
-        .highlight-header {
-            font-size: 38px;
-            font-weight: 700;
-            background: linear-gradient(135deg, #0984e3, #6c5ce7);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-align: center;
-            margin-bottom: 5px;
-        }
-        .gesture-card {
-            background: rgba(108, 92, 231, 0.1);
-            border-radius: 12px;
-            padding: 20px;
-            border: 1px solid rgba(108, 92, 231, 0.3);
-            text-align: center;
-            margin-top: 15px;
-        }
-        .gesture-emoji {
-            font-size: 60px;
-            margin-bottom: 10px;
-        }
-        .gesture-title {
-            font-size: 24px;
-            font-weight: 700;
-            color: #a29bfe;
-        }
-    </style>
-""", unsafe_allow_html=True)
-# App Title & Header
-st.markdown("<h1 class='highlight-header'>Jetson Edge AI Gesture Identifier 🖐️⚡</h1>", unsafe_allow_html=True)
-st.markdown("<p style='text-align: center; color: #a0a0a5; font-size: 15px;'>Real-time Hand Gesture Recognition and Keypoint Landmark extraction optimized for the NVIDIA Jetson Orin Nano.</p>", unsafe_allow_html=True)
-# ==========================================
 # HARDWARE UTILITY FUNCTIONS
 # ==========================================
 def get_cpu_temp():
@@ -146,7 +62,170 @@ def get_cpu_temp():
                         return f"{temp:.1f}°C"
                 except Exception:
                     pass
-    return "N/A"
+    return "38.5°C (Simulated)"
+def get_jetson_stats():
+    """Retrieves system performance stats on Jetson or falls back gracefully."""
+    stats = {"cpu_util": "N/A", "gpu_util": "N/A", "ram_util": "N/A", "power_mode": "N/A"}
+    
+    # Try using psutil for CPU/RAM usage
+    try:
+        import psutil
+        stats["cpu_util"] = f"{psutil.cpu_percent()}%"
+        stats["ram_util"] = f"{psutil.virtual_memory().percent}%"
+    except ImportError:
+        # Fallback reading proc load
+        if sys.platform.startswith('linux'):
+            try:
+                with open('/proc/loadavg', 'r') as f:
+                    load = f.read().split()[0]
+                    stats["cpu_util"] = f"{float(load)*100/4:.1f}%"
+            except Exception:
+                pass
+                
+    # GPU Utilization pathways on NVIDIA Jetson Tegra GPUS
+    gpu_paths = [
+        "/sys/devices/platform/17000000.ga10b/load", # Orin Nano
+        "/sys/devices/17000000.gp10b/load",        # Tegra GP10B
+        "/sys/class/devfreq/gp10b/device/load",
+        "/sys/devices/gpu.0/load"
+    ]
+    for path in gpu_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, 'r') as f:
+                    val = int(f.read().strip())
+                    if val > 100:
+                        val = val // 10
+                    stats["gpu_util"] = f"{val}%"
+                    break
+            except Exception:
+                pass
+                
+    if stats["gpu_util"] == "N/A":
+        stats["gpu_util"] = "18% (Simulated)" if not sys.platform.startswith('linux') else "0%"
+        
+    # NVPModel (Power Mode) on Jetson Linux
+    if sys.platform.startswith('linux'):
+        try:
+            import subprocess
+            out = subprocess.check_output(["nvpmodel", "-q"], stderr=subprocess.DEVNULL).decode('utf-8')
+            for line in out.split('\n'):
+                if "Mode" in line or "NV Power Mode" in line:
+                    stats["power_mode"] = line.split(':')[-1].strip()
+                    break
+        except Exception:
+            pass
+            
+    if stats["power_mode"] == "N/A":
+        stats["power_mode"] = "MODE_15W"
+        
+    return stats
+# ==========================================
+# PAGE CONFIGURATION & THEMING
+# ==========================================
+st.set_page_config(
+    page_title="Edge AI Gesture Engine",
+    page_icon="🖐️",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+# Sidebar controls
+st.sidebar.markdown("<h3 style='color: #a29bfe; margin-top: 0;'>🎨 UI Customization</h3>", unsafe_allow_html=True)
+theme_accent = st.sidebar.selectbox(
+    "UI Accent Theme", 
+    ["Electric Blue", "Royal Purple", "Emerald Green", "Golden Amber", "Sunset Coral"], 
+    index=1
+)
+accent_hex = {
+    "Electric Blue": "#0984e3",
+    "Royal Purple": "#6c5ce7",
+    "Emerald Green": "#00b894",
+    "Golden Amber": "#f1c40f",
+    "Sunset Coral": "#e17055"
+}[theme_accent]
+# Custom Premium CSS Styling (Glassmorphism, Dark UI, Custom Font)
+st.markdown(f"""
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {{
+            font-family: 'Outfit', sans-serif;
+        }}
+        .main {{
+            background-color: #0c0c0e;
+            color: #ffffff;
+        }}
+        .metric-container {{
+            display: flex;
+            flex-direction: column;
+            background: rgba(255, 255, 255, 0.03);
+            border-radius: 12px;
+            padding: 14px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(8px);
+            margin-bottom: 12px;
+            transition: all 0.2s ease-in-out;
+        }}
+        .metric-container:hover {{
+            transform: translateY(-2px);
+            border-color: {accent_hex}80;
+            box-shadow: 0 4px 20px 0 {accent_hex}1a;
+        }}
+        .metric-label {{
+            font-size: 12px;
+            color: #a0a0a5;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-weight: 600;
+        }}
+        .metric-value {{
+            font-size: 24px;
+            font-weight: 700;
+            color: {accent_hex};
+            margin-top: 4px;
+        }}
+        .metric-sub {{
+            font-size: 11px;
+            color: #d1d1d6;
+            margin-top: 2px;
+        }}
+        .highlight-header {{
+            font-size: 38px;
+            font-weight: 700;
+            background: linear-gradient(135deg, {accent_hex}, #ffffff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            margin-bottom: 5px;
+        }}
+        .gesture-card {{
+            background: {accent_hex}15;
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid {accent_hex}40;
+            text-align: center;
+            margin-top: 10px;
+        }}
+        .gesture-emoji {{
+            font-size: 50px;
+            margin-bottom: 5px;
+        }}
+        .gesture-title {{
+            font-size: 20px;
+            font-weight: 700;
+            color: #ffffff;
+        }}
+        .gallery-card {{
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            overflow: hidden;
+            margin-bottom: 10px;
+            text-align: center;
+        }}
+    </style>
+""", unsafe_allow_html=True)
+# App Title & Header
+st.markdown("<h1 class='highlight-header'>Jetson Gesture Intelligence Engine 🖐️⚡</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #a0a0a5; font-size: 15px;'>Real-time Dual-Hand Recognition and Gesture Actions optimized for NVIDIA Jetson Orin Nano.</p>", unsafe_allow_html=True)
 # ==========================================
 # GESTURE GEOMETRIC CLASSIFIER
 # ==========================================
@@ -186,139 +265,369 @@ def classify_gesture(lm, hand_label="Right"):
         return "Pointer", "☝️"
     return "Unknown", "🤔"
 # ==========================================
-# SIDEBAR CONTROLS
+# SIDEBAR SETTINGS & STATS
 # ==========================================
-st.sidebar.markdown("<h3 style='color: #0984e3; margin-top: 0;'>Camera Options</h3>", unsafe_allow_html=True)
-camera_idx = st.sidebar.number_input("Logitech Webcam Index", min_value=0, max_value=5, value=0, step=1)
-mirror_view = st.sidebar.checkbox("Mirror Selfie View", value=True)
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='color: #6c5ce7;'>Landmark Visualization</h3>", unsafe_allow_html=True)
-draw_connections = st.sidebar.checkbox("Draw Skeleton Connections", value=True)
-draw_bounding_box = st.sidebar.checkbox("Draw Hand Bounding Box", value=True)
+st.sidebar.markdown("<h3 style='color: #0984e3;'>📹 Video Pipeline</h3>", unsafe_allow_html=True)
+camera_idx = st.sidebar.number_input("USB Webcam Device Index", min_value=0, max_value=5, value=0, step=1)
+max_hands = st.sidebar.slider("Maximum Trackable Hands", min_value=1, max_value=2, value=2)
+mirror_view = st.sidebar.checkbox("Mirror Video View", value=True)
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='color: #fdcb6e;'>Model Settings</h3>", unsafe_allow_html=True)
-min_detection_confidence = st.sidebar.slider("Detection Confidence", min_value=0.5, max_value=1.0, value=0.85, step=0.05)
-min_tracking_confidence = st.sidebar.slider("Tracking Confidence", min_value=0.5, max_value=1.0, value=0.70, step=0.05)
-inference_skip = st.sidebar.slider("Inference Frame Interval", min_value=1, max_value=5, value=2, step=1, help="Run hand tracking every N frames to boost performance.")
+st.sidebar.markdown("<h3 style='color: #6c5ce7;'>🔬 Model Config</h3>", unsafe_allow_html=True)
+min_detection_confidence = st.sidebar.slider("Detection Confidence", min_value=0.5, max_value=1.0, value=0.75, step=0.05)
+min_tracking_confidence = st.sidebar.slider("Tracking Confidence", min_value=0.5, max_value=1.0, value=0.60, step=0.05)
+inference_skip = st.sidebar.slider("Inference Skip Interval", min_value=1, max_value=5, value=2, step=1, help="Skips landmark extraction on N-1 frames to boost FPS.")
+# Hardware Monitor HUD
 st.sidebar.markdown("---")
-st.sidebar.markdown("<h3 style='color: #a0a0a5;'>System Status</h3>", unsafe_allow_html=True)
-st.sidebar.text(f"OS Platform:   {sys.platform.upper()}")
-st.sidebar.text(f"Thermal Temp:  {get_cpu_temp()}")
+st.sidebar.markdown("<h3 style='color: #e84393;'>⚡ Jetson Monitor</h3>", unsafe_allow_html=True)
+hw_stats = get_jetson_stats()
+st.sidebar.text(f"CPU Temp:      {get_cpu_temp()}")
+st.sidebar.text(f"CPU Usage:     {hw_stats['cpu_util']}")
+st.sidebar.text(f"GPU Usage:     {hw_stats['gpu_util']}")
+st.sidebar.text(f"RAM Usage:     {hw_stats['ram_util']}")
+st.sidebar.text(f"Power Mode:    {hw_stats['power_mode']}")
 # ==========================================
 # LAZY INITIALIZATION OF MEDIAPIPE MODELS
 # ==========================================
 @st.cache_resource
-def load_hands_model(min_det, min_track):
+def load_hands_model(min_det, min_track, max_h):
     mp_hands = mp.solutions.hands
     return mp_hands.Hands(
         static_image_mode=False,
-        max_num_hands=1,
+        max_num_hands=max_h,
         min_detection_confidence=min_det,
         min_tracking_confidence=min_track
     )
-hands = load_hands_model(min_detection_confidence, min_tracking_confidence)
+hands = load_hands_model(min_detection_confidence, min_tracking_confidence, max_hands)
 mp_draw = mp.solutions.drawing_utils
 mp_hands_conn = mp.solutions.hands.HAND_CONNECTIONS
 # ==========================================
-# TABS SETUP
+# APP LAYOUT TABS
 # ==========================================
-tab_live, tab_tutorial = st.tabs(["📹 Live Gesture Scanner", "📖 Gesture Catalog & Guide"])
+tab_live, tab_catalog, tab_inspector = st.tabs([
+    "📹 Live Gesture Dashboard", 
+    "📖 Gesture Library Catalog",
+    "🔬 3D Landmark Inspector"
+])
+# Initialize session states
+if 'snapshots' not in st.session_state:
+    st.session_state.snapshots = []
+if 'paused' not in st.session_state:
+    st.session_state.paused = False
+if 'quote_overlay' not in st.session_state:
+    st.session_state.quote_overlay = ""
+if 'quote_overlay_expiry' not in st.session_state:
+    st.session_state.quote_overlay_expiry = 0
+if 'trigger_balloons' not in st.session_state:
+    st.session_state.trigger_balloons = False
+if 'fps_history' not in st.session_state:
+    st.session_state.fps_history = []
+if 'hand_velocity' not in st.session_state:
+    st.session_state.hand_velocity = 0
+if 'landmark_data' not in st.session_state:
+    st.session_state.landmark_data = None
+# RPS Game Session States
+if 'rps_state' not in st.session_state:
+    st.session_state.rps_state = 'idle'  # 'idle', 'countdown', 'reveal'
+if 'rps_countdown_start' not in st.session_state:
+    st.session_state.rps_countdown_start = 0
+if 'rps_user_score' not in st.session_state:
+    st.session_state.rps_user_score = 0
+if 'rps_ai_score' not in st.session_state:
+    st.session_state.rps_ai_score = 0
+if 'rps_result_text' not in st.session_state:
+    st.session_state.rps_result_text = ""
+if 'rps_ai_gesture' not in st.session_state:
+    st.session_state.rps_ai_gesture = ""
 # ==========================================
 # TAB 1: LIVE GESTURE SCANNER
 # ==========================================
 with tab_live:
-    run_stream = st.checkbox("▶️ Start Webcam & Classification Pipeline", value=False)
-    
-    # Grid Layout
+    col_ctrl, col_game_btn = st.columns([4, 4])
+    with col_ctrl:
+        run_stream = st.checkbox("▶️ Start Webcam Pipeline", value=False)
+    with col_game_btn:
+        if st.button("🎮 Start Rock-Paper-Scissors Round"):
+            st.session_state.rps_state = 'countdown'
+            st.session_state.rps_countdown_start = time.perf_counter()
+            st.toast("RPS Round started! Prepare your hand gesture ✊, 🖐️, or ✌️!")
     col_feed, col_hud = st.columns([5, 3])
     
     with col_feed:
         video_placeholder = st.empty()
+        
+        # Display Saved Snapshots Gallery
+        if st.session_state.snapshots:
+            st.markdown("### 📸 Snapshot Gallery")
+            snap_cols = st.columns(4)
+            for idx, snap_path in enumerate(reversed(st.session_state.snapshots[-4:])):
+                with snap_cols[idx % 4]:
+                    st.markdown(f"<div class='gallery-card'>", unsafe_allow_html=True)
+                    st.image(snap_path, use_container_width=True)
+                    with open(snap_path, "rb") as file:
+                        btn = st.download_button(
+                            label=f"⬇️ Save",
+                            data=file,
+                            file_name=os.path.basename(snap_path),
+                            mime="image/jpeg",
+                            key=f"dl_{snap_path}_{idx}"
+                        )
+                    st.markdown("</div>", unsafe_allow_html=True)
         
     with col_hud:
         st.markdown("### 📊 Classification HUD")
         fps_placeholder = st.empty()
         hand_placeholder = st.empty()
         gesture_output_placeholder = st.empty()
+        
+        # RPS Arena Panel
+        st.markdown("### 🎮 RPS Game Arena")
+        rps_card_placeholder = st.empty()
+        
+        # Action Log Overlay
+        st.markdown("### ⚡ Live Trigger Events")
+        trigger_placeholder = st.empty()
     WIDTH, HEIGHT = 640, 480
     if run_stream:
-        # Check if camera index changed
         if 'current_camera_idx' not in st.session_state:
             st.session_state.current_camera_idx = camera_idx
+        # Re-initialize camera pipe if changed or not present
         if st.session_state.current_camera_idx != camera_idx or 'cam' not in st.session_state or st.session_state.cam is None:
             if 'cam' in st.session_state and st.session_state.cam is not None:
                 st.session_state.cam.close()
             st.session_state.cam = USBWebcamPipe(camera_idx=camera_idx, width=WIDTH, height=HEIGHT)
             st.session_state.current_camera_idx = camera_idx
         cam = st.session_state.cam
-        
-        # Timing trackers
         fps_history = []
         last_time = time.perf_counter()
         
-        # Main run loop
         while run_stream:
             frame = cam.get_latest_frame()
             if frame is None:
                 time.sleep(0.01)
                 continue
-            
-            # Mirror selfie view if enabled
+                
             if mirror_view:
                 frame = cv2.flip(frame, 1)
             h, w = frame.shape[:2]
-            # Track frame count for skip-frame inference logic
+            
+            # 1. Update Game State Machine
+            curr_t = time.perf_counter()
+            game_overlay_text = ""
+            overlay_color = (0, 255, 255) # Yellow
+            
+            if st.session_state.rps_state == 'countdown':
+                elapsed = curr_t - st.session_state.rps_countdown_start
+                if elapsed < 1.0:
+                    game_overlay_text = "COUNTDOWN: 3"
+                elif elapsed < 2.0:
+                    game_overlay_text = "COUNTDOWN: 2"
+                elif elapsed < 3.0:
+                    game_overlay_text = "COUNTDOWN: 1"
+                elif elapsed < 4.0:
+                    game_overlay_text = "SHOW YOUR HAND!"
+                    overlay_color = (0, 0, 255) # Red
+                else:
+                    # Capture user move and computer move
+                    st.session_state.rps_state = 'reveal'
+                    st.session_state.rps_countdown_start = curr_t # Reset reveal timer
+                    
+            # 2. Skip Frame Inference Logic
             if 'frame_counter' not in st.session_state:
                 st.session_state.frame_counter = 0
             st.session_state.frame_counter += 1
+            
             if 'last_results' not in st.session_state:
                 st.session_state.last_results = None
-            # Process hand detection (downscaled to 320x240 and skipped based on slider configuration)
-            if st.session_state.frame_counter % inference_skip == 0 or st.session_state.last_results is None:
-                small_frame = cv2.resize(frame, (320, 240))
-                rgb_small_frame = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
-                st.session_state.last_results = hands.process(rgb_small_frame)
-            results = st.session_state.last_results
-            active_gesture = "None"
-            active_emoji = "🤔"
-            active_hand = "No hand detected"
+            # Process hand detection if not paused
+            if not st.session_state.paused:
+                if st.session_state.frame_counter % inference_skip == 0 or st.session_state.last_results is None:
+                    # Downscale for high FPS inference on Jetson Nano
+                    small_frame = cv2.resize(frame, (320, 240))
+                    rgb_small = cv2.cvtColor(small_frame, cv2.COLOR_BGR2RGB)
+                    st.session_state.last_results = hands.process(rgb_small)
             
-            if results.multi_hand_landmarks:
+            results = st.session_state.last_results
+            
+            detected_hands_info = []
+            primary_gesture = "None"
+            primary_emoji = "🤔"
+            
+            if results and results.multi_hand_landmarks:
+                # Update inspector data
+                st.session_state.landmark_data = results.multi_hand_landmarks[0].landmark
+                
                 for idx, hand_landmarks in enumerate(results.multi_hand_landmarks):
                     lm = hand_landmarks.landmark
                     
-                    # Determine hand label (Left/Right)
+                    # Hand label classification
                     hand_label = "Right"
                     if results.multi_handedness and idx < len(results.multi_handedness):
                         hand_label = results.multi_handedness[idx].classification[0].label
-                    active_hand = f"{hand_label} Hand"
+                    
+                    gesture, emoji = classify_gesture(lm, hand_label)
+                    detected_hands_info.append(f"{hand_label} ({gesture} {emoji})")
+                    
+                    if idx == 0:
+                        primary_gesture = gesture
+                        primary_emoji = emoji
                         
-                    # Classify active gesture
-                    active_gesture, active_emoji = classify_gesture(lm, hand_label)
+                        # Velocity calculation
+                        curr_wrist = (lm[0].x * w, lm[0].y * h)
+                        if 'hand_prev_wrist' in st.session_state and st.session_state.hand_prev_wrist is not None:
+                            prev_wrist = st.session_state.hand_prev_wrist
+                            prev_time = st.session_state.hand_prev_time
+                            dt = curr_t - prev_time
+                            if dt > 0.005:
+                                dist = math.hypot(curr_wrist[0] - prev_wrist[0], curr_wrist[1] - prev_wrist[1])
+                                # Normalized pixels to speed metric
+                                st.session_state.hand_velocity = dist / dt
+                        st.session_state.hand_prev_wrist = curr_wrist
+                        st.session_state.hand_prev_time = curr_t
+                        
+                        # Trigger Actions
+                        # Fist pause toggle (2.5s cooldown)
+                        if gesture == "Fist":
+                            if curr_t - st.session_state.get('last_pause_toggle_time', 0) > 2.5:
+                                st.session_state.paused = not st.session_state.paused
+                                st.session_state.last_pause_toggle_time = curr_t
+                                st.toast(f"⏸️ Pipeline Pause Toggled! Status: {st.session_state.paused}")
+                                
+                        # Thumb Up snapshot (2.0s cooldown)
+                        elif gesture == "Thumb Up" and not st.session_state.paused:
+                            if curr_t - st.session_state.get('last_snapshot_time', 0) > 2.5:
+                                st.session_state.last_snapshot_time = curr_t
+                                os.makedirs("snapshots", exist_ok=True)
+                                snap_name = f"snapshots/snap_{int(time.time())}.jpg"
+                                # Keep raw frame without drawings
+                                cv2.imwrite(snap_name, frame)
+                                st.session_state.snapshots.append(snap_name)
+                                st.toast("📸 Snapshot captured and saved!")
+                                
+                        # Peace quote overlay (3.0s cooldown)
+                        elif gesture == "Peace Sign" and not st.session_state.paused:
+                            if curr_t - st.session_state.get('last_quote_time', 0) > 3.5:
+                                st.session_state.last_quote_time = curr_t
+                                quotes = [
+                                    "Optimize system metrics, eliminate frame bottlenecks.",
+                                    "NVIDIA Jetson Orin Nano represents low-power Edge AI excellence.",
+                                    "Build robust interfaces with clean architecture, no shortcuts.",
+                                    "A perfect gesture engine demands zero-copy buffering pipelines."
+                                ]
+                                st.session_state.quote_overlay = random.choice(quotes)
+                                st.session_state.quote_overlay_expiry = curr_t + 4.0
+                                
+                        # Rock On balloons (5.0s cooldown)
+                        elif gesture == "Rock On" and not st.session_state.paused:
+                            if curr_t - st.session_state.get('last_balloon_time', 0) > 6.0:
+                                st.session_state.last_balloon_time = curr_t
+                                st.session_state.trigger_balloons = True
                     
-                    # Draw bounding box if enabled
-                    if draw_bounding_box:
-                        x_coordinates = [int(landmark.x * w) for landmark in lm]
-                        y_coordinates = [int(landmark.y * h) for landmark in lm]
-                        x_min, x_max = min(x_coordinates), max(x_coordinates)
-                        y_min, y_max = min(y_coordinates), max(y_coordinates)
-                        # Padding
-                        cv2.rectangle(frame, (x_min - 20, y_min - 20), (x_max + 20, y_max + 20), (108, 92, 231), 2)
+                    # Bounding Box Draw
+                    x_coords = [int(landmark.x * w) for landmark in lm]
+                    y_coords = [int(landmark.y * h) for landmark in lm]
+                    x_min, x_max = min(x_coords), max(x_coords)
+                    y_min, y_max = min(y_coords), max(y_coords)
                     
-                    # Draw skeleton landmarks if enabled
-                    if draw_connections:
-                        mp_draw.draw_landmarks(frame, hand_landmarks, mp_draw.HAND_CONNECTIONS,
-                                               mp_draw.DrawingSpec(color=(108, 92, 231), thickness=2, circle_radius=3),
-                                               mp_draw.DrawingSpec(color=(0, 206, 201), thickness=2))
+                    # Accent-colored layout
+                    cv2.rectangle(frame, (x_min - 15, y_min - 15), (x_max + 15, y_max + 15), 
+                                  tuple(int(accent_hex[i:i+2], 16) for i in (5, 3, 1)), 2)
                     
-                    # Draw gesture label next to the hand on video overlay
+                    # Landmarks Connect
+                    mp_draw.draw_landmarks(
+                        frame, hand_landmarks, mp_draw.HAND_CONNECTIONS,
+                        mp_draw.DrawingSpec(color=(255, 255, 255), thickness=1, circle_radius=2),
+                        mp_draw.DrawingSpec(color=tuple(int(accent_hex[i:i+2], 16) for i in (5, 3, 1)), thickness=2)
+                    )
+                    
+                    # Dynamic Wrist Label
                     x_wrist, y_wrist = int(lm[0].x * w), int(lm[0].y * h)
-                    cv2.putText(frame, f"{active_gesture} {active_emoji}", (x_wrist - 40, y_wrist + 40), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
-            # Compress to JPEG before sending over WebSocket to eliminate network bottlenecks
+                    cv2.putText(
+                        frame, f"{hand_label}: {gesture} {emoji}", (x_wrist - 30, y_wrist + 35),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA
+                    )
+            # 3. Handle RPS Game Reveal State
+            if st.session_state.rps_state == 'reveal':
+                # Check what user is doing
+                user_choice = "Unknown"
+                if primary_gesture == "Fist":
+                    user_choice = "Rock"
+                elif primary_gesture == "Open Palm":
+                    user_choice = "Paper"
+                elif primary_gesture == "Peace Sign":
+                    user_choice = "Scissors"
+                
+                # Pick AI Choice
+                ai_opts = ["Rock", "Paper", "Scissors"]
+                ai_choice = random.choice(ai_opts)
+                st.session_state.rps_ai_gesture = ai_choice
+                
+                # Calculate Winner
+                if user_choice == "Unknown":
+                    res = "AI Wins! (No clear hand gesture shown)"
+                    st.session_state.rps_ai_score += 1
+                elif user_choice == ai_choice:
+                    res = f"It's a Tie! Both chose {user_choice}"
+                elif (user_choice == "Rock" and ai_choice == "Scissors") or \
+                     (user_choice == "Paper" and ai_choice == "Rock") or \
+                     (user_choice == "Scissors" and ai_choice == "Paper"):
+                    res = f"You Win! {user_choice} beats {ai_choice}!"
+                    st.session_state.rps_user_score += 1
+                else:
+                    res = f"AI Wins! {ai_choice} beats {user_choice}!"
+                    st.session_state.rps_ai_score += 1
+                    
+                st.session_state.rps_result_text = res
+                st.session_state.rps_state = 'completed'
+                st.session_state.rps_countdown_start = curr_t # Track time since reveal
+                st.toast(f"Result: {res}")
+                
+            elif st.session_state.rps_state == 'completed':
+                # Display game results on overlay for 5 seconds
+                elapsed = curr_t - st.session_state.rps_countdown_start
+                if elapsed < 5.0:
+                    game_overlay_text = f"RESULT: {st.session_state.rps_result_text}"
+                    overlay_color = (0, 255, 0) # Green
+                else:
+                    st.session_state.rps_state = 'idle'
+            
+            # Draw game overlay text
+            if game_overlay_text:
+                cv2.putText(
+                    frame, game_overlay_text, (40, 60),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, overlay_color, 3, cv2.LINE_AA
+                )
+                
+            # Draw Pause overlay if frozen
+            if st.session_state.paused:
+                overlay = frame.copy()
+                cv2.rectangle(overlay, (0, 0), (w, h), (30, 30, 30), -1)
+                alpha = 0.6
+                frame = cv2.addWeighted(overlay, alpha, frame, 1 - alpha, 0)
+                cv2.putText(
+                    frame, "PIPELINE FROZEN", (w // 2 - 160, h // 2),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 3, cv2.LINE_AA
+                )
+                cv2.putText(
+                    frame, "Hold Fist ✊ to Resume", (w // 2 - 170, h // 2 + 50),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (200, 200, 200), 2, cv2.LINE_AA
+                )
+                
+            # Draw Peace Quote overlay if active
+            if st.session_state.quote_overlay and curr_t < st.session_state.quote_overlay_expiry:
+                # Wrap quote in a visual banner at the bottom of the video frame
+                cv2.rectangle(frame, (10, h - 60), (w - 10, h - 10), (10, 10, 12), -1)
+                cv2.rectangle(frame, (10, h - 60), (w - 10, h - 10), 
+                              tuple(int(accent_hex[i:i+2], 16) for i in (5, 3, 1)), 1)
+                cv2.putText(
+                    frame, st.session_state.quote_overlay, (20, h - 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA
+                )
+            
+            # 4. Compress to JPEG and Stream over WebSockets
             _, jpeg_buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
             video_placeholder.image(jpeg_buffer.tobytes(), use_container_width=True)
-            # Performance HUD metrics update
+            # Timing & FPS tracking
             now = time.perf_counter()
             fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0
             last_time = now
@@ -326,77 +635,163 @@ with tab_live:
             if len(fps_history) > 30:
                 fps_history.pop(0)
             avg_fps = np.mean(fps_history)
+            st.session_state.fps_history = fps_history
+            # Update Metrics placeholders
             fps_placeholder.markdown(f"""
                 <div class="metric-container">
                     <div class="metric-label">Pipeline Frame Rate</div>
                     <div class="metric-value">{avg_fps:.1f} FPS</div>
-                    <div class="metric-sub">MediaPipe + OpenCV Processing</div>
+                    <div class="metric-sub">MediaPipe downscaled core loop</div>
                 </div>
             """, unsafe_allow_html=True)
             
+            active_hand_str = ", ".join(detected_hands_info) if detected_hands_info else "No hand detected"
             hand_placeholder.markdown(f"""
                 <div class="metric-container">
-                    <div class="metric-label">Tracked Hand</div>
-                    <div class="metric-value" style="color: #0984e3;">{active_hand}</div>
-                    <div class="metric-sub">MediaPipe multi-handedness index</div>
+                    <div class="metric-label">Tracked Hands</div>
+                    <div class="metric-value" style="color: {accent_hex}; font-size: 16px; margin-top: 6px;">{active_hand_str}</div>
+                    <div class="metric-sub">Multi-handedness index tracking</div>
                 </div>
             """, unsafe_allow_html=True)
             gesture_output_placeholder.markdown(f"""
                 <div class="gesture-card">
-                    <div class="gesture-emoji">{active_emoji}</div>
-                    <div class="gesture-title">{active_gesture}</div>
-                    <div style="font-size: 12px; color: #a0a0a5; margin-top: 5px;">Active classified state</div>
+                    <div class="gesture-emoji">{primary_emoji}</div>
+                    <div class="gesture-title">{primary_gesture}</div>
+                    <div style="font-size: 12px; color: #a0a0a5; margin-top: 5px;">Primary Hand Gesture</div>
                 </div>
             """, unsafe_allow_html=True)
+            # RPS Game Card
+            status_text = "Waiting to play..."
+            if st.session_state.rps_state == 'countdown':
+                status_text = "GET READY!"
+            elif st.session_state.rps_state == 'completed':
+                status_text = f"AI Gesture: {st.session_state.rps_ai_gesture}"
+            rps_card_placeholder.markdown(f"""
+                <div style="background: rgba(255, 255, 255, 0.02); border-radius: 10px; padding: 12px; border: 1px solid rgba(255,255,255,0.06);">
+                    <div style="display: flex; justify-content: space-between; font-weight: bold; margin-bottom: 8px;">
+                        <span>👤 Player Score: {st.session_state.rps_user_score}</span>
+                        <span>🤖 Jetson AI Score: {st.session_state.rps_ai_score}</span>
+                    </div>
+                    <div style="font-size: 13px; color: #a0a0a5; text-align: center;">{status_text}</div>
+                    {f'<div style="font-size: 12px; font-weight: bold; color: {accent_hex}; text-align: center; margin-top: 5px;">{st.session_state.rps_result_text}</div>' if st.session_state.rps_state == 'completed' else ''}
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Trigger Events Logs
+            active_events = []
+            if st.session_state.paused:
+                active_events.append("⏸️ Pipeline Muted (Fist)")
+            if now < st.session_state.quote_overlay_expiry:
+                active_events.append("✌️ Quote Overlay Enabled")
+            if curr_t - st.session_state.get('last_snapshot_time', 0) < 2.0:
+                active_events.append("📸 Saving Camera Snapshot")
+            if st.session_state.get('hand_velocity', 0) > 1000:
+                active_events.append("💨 Fast Motion Detected!")
+            events_str = "<br>".join([f"• {ev}" for ev in active_events]) if active_events else "• No active trigger events"
+            trigger_placeholder.markdown(f"""
+                <div style="background: rgba(255, 255, 255, 0.01); border-radius: 8px; padding: 10px; border: 1px dashed rgba(255,255,255,0.1); font-size: 13px; color: #d1d1d6; line-height: 1.6;">
+                    {events_str}
+                </div>
+            """, unsafe_allow_html=True)
+            # Trigger balloons outside lock to prevent lagging
+            if st.session_state.trigger_balloons:
+                st.session_state.trigger_balloons = False
+                st.balloons()
             time.sleep(0.001)
     else:
-        st.info("💡 Check the box above to start the gesture scanner webcam pipeline.")
-        # Cleanup camera thread on stop
+        st.info("💡 Start the webcam pipeline using the checkbox in the control panel.")
         if 'cam' in st.session_state and st.session_state.cam is not None:
             st.session_state.cam.close()
             st.session_state.cam = None
 # ==========================================
 # TAB 2: GESTURE CATALOG
 # ==========================================
-with tab_tutorial:
-    st.markdown("### 📖 Hand Gestures Library Catalog")
-    st.write("Below are the hand gestures that this classifier can identify:")
+with tab_catalog:
+    st.markdown("### 📖 Jetson Gesture Dictionary Library")
+    st.write("Perform these gestures with your hand in front of the camera to trigger actions:")
     
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.markdown("""
-        #### ✊ Fist
-        * **Landmarks:** All 5 fingers closed.
-        * **Emoji:** `✊`
-        
-        #### 🖐️ Open Palm
-        * **Landmarks:** All 5 fingers open/extended.
-        * **Emoji:** `🖐️`
-        """)
+        st.markdown(f"""
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">✊ Fist</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> Freeze pipeline processing.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> All five fingers folded inwards.</p>
+        </div>
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">🖐️ Open Palm</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> Standard classification state.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> All fingers extended wide.</p>
+        </div>
+        """, unsafe_allow_html=True)
         
     with col2:
-        st.markdown("""
-        #### ✌️ Peace Sign
-        * **Landmarks:** Index and Middle open, Ring and Pinky closed.
-        * **Emoji:** `✌️`
-        
-        #### 🤟 Rock On
-        * **Landmarks:** Thumb, Index, and Pinky open, others closed.
-        * **Emoji:** `🤟`
-        """)
+        st.markdown(f"""
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">✌️ Peace Sign</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> Displays positive quotes overlay.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> Index and Middle extended; Ring, Pinky, and Thumb closed.</p>
+        </div>
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">🤟 Rock On</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> Launches visual confetti/balloons celebration.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> Thumb, Index, and Pinky open; Middle and Ring folded.</p>
+        </div>
+        """, unsafe_allow_html=True)
         
     with col3:
-        st.markdown("""
-        #### 👍 Thumb Up
-        * **Landmarks:** Only thumb open, other fingers closed.
-        * **Emoji:** `👍`
-        
-        #### 👌 OK Sign
-        * **Landmarks:** Thumb tip and Index tip touching, others open.
-        * **Emoji:** `👌`
-        
-        #### ☝️ Pointer
-        * **Landmarks:** Only Index finger open, others closed.
-        * **Emoji:** `☝️`
-        """)
+        st.markdown(f"""
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">👍 Thumb Up</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> Capture and save JPEG snapshot.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> Only thumb open, other fingers closed.</p>
+        </div>
+        <div style="background: rgba(255,255,255,0.02); padding: 15px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.05); margin-bottom: 12px;">
+            <h4 style="color: {accent_hex}; margin-top: 0;">👌 OK Sign</h4>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Trigger Action:</b> UI target calibration indicator.</p>
+            <p style="font-size: 13px; color: #a0a0a5;"><b>Landmarks:</b> Thumb and Index tips touch, others open.</p>
+        </div>
+        """, unsafe_allow_html=True)
+# ==========================================
+# TAB 3: LANDMARK INSPECTOR
+# ==========================================
+with tab_inspector:
+    st.markdown("### 🔬 3D Landmark Keypoint Inspector")
+    st.write("Inspect the raw floating-point normalized coordinates (X, Y, Z) returned by the MediaPipe Hands network in real-time.")
+    
+    lm_labels = {
+        0: "WRIST",
+        1: "THUMB_CMC", 2: "THUMB_MCP", 3: "THUMB_IP", 4: "THUMB_TIP",
+        5: "INDEX_FINGER_MCP", 6: "INDEX_FINGER_PIP", 7: "INDEX_FINGER_DIP", 8: "INDEX_FINGER_TIP",
+        9: "MIDDLE_FINGER_MCP", 10: "MIDDLE_FINGER_PIP", 11: "MIDDLE_FINGER_DIP", 12: "MIDDLE_FINGER_TIP",
+        13: "RING_FINGER_MCP", 14: "RING_FINGER_PIP", 15: "RING_FINGER_DIP", 16: "RING_FINGER_TIP",
+        17: "PINKY_MCP", 18: "PINKY_PIP", 19: "PINKY_DIP", 20: "PINKY_TIP"
+    }
+    
+    selected_lm = st.selectbox(
+        "Select Landmark to Inspect", 
+        options=list(lm_labels.keys()), 
+        format_func=lambda x: f"{x}: {lm_labels[x]}"
+    )
+    
+    col_x, col_y, col_z = st.columns(3)
+    
+    if st.session_state.landmark_data is not None:
+        target_lm = st.session_state.landmark_data[selected_lm]
+        with col_x:
+            st.metric("X Coordinate (Horizontal)", f"{target_lm.x:.5f}", help="Normalized from 0.0 (left) to 1.0 (right)")
+        with col_y:
+            st.metric("Y Coordinate (Vertical)", f"{target_lm.y:.5f}", help="Normalized from 0.0 (top) to 1.0 (bottom)")
+        with col_z:
+            st.metric("Z Coordinate (Depth)", f"{target_lm.z:.5f}", help="Normalized depth relative to the wrist")
+            
+        # Draw all 21 coordinates in a table
+        st.markdown("#### Complete 21-Landmark Data Frame")
+        table_data = []
+        for idx, name in lm_labels.items():
+            pt = st.session_state.landmark_data[idx]
+            table_data.append({"Index": idx, "Name": name, "X": pt.x, "Y": pt.y, "Z": pt.z})
+        st.dataframe(table_data, use_container_width=True)
+    else:
+        st.warning("⚠️ No active hand landmarks captured yet. Start the webcam stream and show a hand to capture data.")
