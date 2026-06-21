@@ -1,1 +1,26 @@
-pip install https://huggingface.co/limegreenpeper1/PrecompiledWheels/resolve/main/mediapipe-0.10.26-cp310-cp310-linux_aarch64.whl
+(venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ streamlit run hands.py --server.port 8502 --server.address 0.0.0.0
+2026-06-21 17:50:11.907 Uvicorn server started on 0.0.0.0:8502
+
+  You can now view your Streamlit app in your browser.
+
+  Local URL: http://localhost:8502
+  Network URL: http://192.168.1.215:8502
+
+────────────────────────── Traceback (most recent call last) ───────────────────────────
+  /home/gitam/.local/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/exec_  
+  code.py:129 in exec_func_with_error_handling                                          
+                                                                                        
+  /home/gitam/.local/lib/python3.10/site-packages/streamlit/runtime/scriptrunner/scrip  
+  t_runner.py:789 in code_to_exec                                                       
+                                                                                        
+  /home/gitam/mnt/storage/demo/hands/hands.py:9 in <module>                             
+                                                                                        
+      6 import numpy as np                                                              
+      7 import cv2                                                                      
+      8 import streamlit as st                                                          
+  ❱   9 import mediapipe as mp                                                          
+     10 # ==========================================                                    
+     11 # THREADED LOW-LATENCY CAMERA CAPTURE PIPELINE                                  
+     12 # ==========================================                                    
+────────────────────────────────────────────────────────────────────────────────────────
+ModuleNotFoundError: No module named 'mediapipe'
