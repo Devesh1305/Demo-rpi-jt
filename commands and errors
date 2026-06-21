@@ -1,1 +1,14 @@
-pip install https://github.com/lanzani/jetson-libraries/raw/main/libraries/mediapipe/l4t32.7.1/py3.10.11/mp0.10.7/mediapipe-0.10.7-cp310-cp310-linux_aarch64.whl
+venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ pip install --upgrade pip
+Requirement already satisfied: pip in ./venv/lib/python3.10/site-packages (22.0.2)
+Collecting pip
+  Downloading pip-26.1.2-py3-none-any.whl (1.8 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.8/1.8 MB 1.4 MB/s eta 0:00:00
+Installing collected packages: pip
+  Attempting uninstall: pip
+    Found existing installation: pip 22.0.2
+    Uninstalling pip-22.0.2:
+      Successfully uninstalled pip-22.0.2
+Successfully installed pip-26.1.2
+(venv) gitam@Gitam-Nano:~/mnt/storage/demo/hands$ pip install meadiapipe
+ERROR: Could not find a version that satisfies the requirement meadiapipe (from versions: none)
+ERROR: No matching distribution found for meadiapipe
