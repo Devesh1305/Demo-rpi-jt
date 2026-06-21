@@ -1,0 +1,397 @@
+import os
+import sys
+import time
+import math
+import threading
+import numpy as np
+import cv2
+import streamlit as st
+import mediapipe as mp
+# ==========================================
+# THREADED LOW-LATENCY CAMERA CAPTURE PIPELINE
+# ==========================================
+class USBWebcamPipe:
+    """Low-latency threaded camera fetcher for USB webcams on Jetson/PC"""
+    def __init__(self, camera_idx=0, width=640, height=480):
+        self.cap = cv2.VideoCapture(camera_idx)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        # Force a small buffer size to reduce frames lag
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
+        self.latest_frame = None
+        self.lock = threading.Lock()
+        self.is_running = True
+        self.thread = threading.Thread(target=self._reader_thread, daemon=True)
+        self.thread.start()
+    def _reader_thread(self):
+        while self.is_running:
+            ret, frame = self.cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+            with self.lock:
+                self.latest_frame = frame
+    def get_latest_frame(self):
+        with self.lock:
+            return self.latest_frame.copy() if self.latest_frame is not None else None
+    def close(self):
+        self.is_running = False
+        if self.cap.isOpened():
+            self.cap.release()
+# ==========================================
+# PAGE CONFIG & CSS STYLING
+# ==========================================
+st.set_page_config(
+    page_title="Edge AI Air Doodler",
+    page_icon="🎨",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+# Custom Premium CSS Styling (Glassmorphism, Dark UI, Custom Font)
+st.markdown("""
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;700&display=swap" rel="stylesheet">
+    <style>
+        * {
+            font-family: 'Outfit', sans-serif;
+        }
+        .main {
+            background-color: #0f0f11;
+            color: #ffffff;
+        }
+        .metric-container {
+            display: flex;
+            flex-direction: column;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            margin-bottom: 12px;
+            transition: all 0.2s ease-in-out;
+        }
+        .metric-container:hover {
+            transform: translateY(-2px);
+            border-color: rgba(9, 132, 227, 0.5);
+            box-shadow: 0 4px 20px 0 rgba(9, 132, 227, 0.15);
+        }
+        .metric-label {
+            font-size: 13px;
+            color: #a0a0a5;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            font-weight: 600;
+        }
+        .metric-value {
+            font-size: 26px;
+            font-weight: 700;
+            color: #55efc4;
+            margin-top: 4px;
+        }
+        .metric-sub {
+            font-size: 11px;
+            color: #d1d1d6;
+            margin-top: 2px;
+        }
+        .highlight-header {
+            font-size: 38px;
+            font-weight: 700;
+            background: linear-gradient(135deg, #00b894, #0984e3);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-align: center;
+            margin-bottom: 5px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+# App Title & Header
+st.markdown("<h1 class='highlight-header'>Jetson Edge AI Air Doodler 🎨⚡</h1>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: #a0a0a5; font-size: 15px;'>Real-time AI Air-Drawing using Google MediaPipe Hand Landmarks optimized for the NVIDIA Jetson Orin Nano.</p>", unsafe_allow_html=True)
+# ==========================================
+# HARDWARE UTILITY FUNCTIONS
+# ==========================================
+def get_cpu_temp():
+    """Retrieves CPU temperature if available on Linux/Jetson."""
+    if sys.platform.startswith('linux'):
+        for i in range(5):
+            path = f"/sys/class/thermal/thermal_zone{i}/temp"
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        temp = float(f.read().strip()) / 1000.0
+                        return f"{temp:.1f}°C"
+                except Exception:
+                    pass
+    return "N/A"
+# ==========================================
+# INITIALIZE PERSISTENT STATE VARIABLES
+# ==========================================
+WIDTH, HEIGHT = 640, 480
+if 'canvas' not in st.session_state:
+    st.session_state.canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+if 'xp' not in st.session_state:
+    st.session_state.xp = 0
+if 'yp' not in st.session_state:
+    st.session_state.yp = 0
+# Colors mapping: [Purple, Blue, Green, Red, CLEAR]
+COLORS = [(130, 0, 180), (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]
+COLOR_NAMES = ["Purple", "Blue", "Green", "Red"]
+if 'color_idx' not in st.session_state:
+    st.session_state.color_idx = 0
+# ==========================================
+# SIDEBAR CONTROLS
+# ==========================================
+st.sidebar.markdown("<h3 style='color: #00b894; margin-top: 0;'>Camera Controls</h3>", unsafe_allow_html=True)
+camera_idx = st.sidebar.number_input("Logitech Webcam Index", min_value=0, max_value=5, value=0, step=1)
+mirror_view = st.sidebar.checkbox("Mirror Selfie View", value=True)
+st.sidebar.markdown("<h3 style='color: #0984e3;'>Drawing settings</h3>", unsafe_allow_html=True)
+brush_size = st.sidebar.slider("Brush Thickness", min_value=2, max_value=20, value=6, step=1)
+# Hand selection shortcut color
+st.sidebar.markdown("**Manual Color Selection Override:**")
+manual_color_select = st.sidebar.selectbox("Active Drawing Color", COLOR_NAMES, index=st.session_state.color_idx)
+st.session_state.color_idx = COLOR_NAMES.index(manual_color_select)
+st.sidebar.markdown("---")
+st.sidebar.markdown("<h3 style='color: #fdcb6e;'>Model Thresholds</h3>", unsafe_allow_html=True)
+min_detection_confidence = st.sidebar.slider("MediaPipe Detection Conf", min_value=0.5, max_value=1.0, value=0.85, step=0.05)
+min_tracking_confidence = st.sidebar.slider("MediaPipe Tracking Conf", min_value=0.5, max_value=1.0, value=0.70, step=0.05)
+st.sidebar.markdown("---")
+# Nuke Canvas action
+if st.sidebar.button("🧹 Clear Doodle Canvas"):
+    st.session_state.canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+    st.session_state.xp = 0
+    st.session_state.yp = 0
+    st.success("Canvas Cleared!")
+# Export canvas to PNG byte stream
+success, encoded_image = cv2.imencode('.png', st.session_state.canvas)
+if success:
+    png_bytes = encoded_image.tobytes()
+    st.sidebar.download_button(
+        label="📥 Download Canvas Drawing",
+        data=png_bytes,
+        file_name="air_doodle.png",
+        mime="image/png"
+    )
+st.sidebar.markdown("---")
+st.sidebar.markdown("<h3 style='color: #a0a0a5;'>System Status</h3>", unsafe_allow_html=True)
+st.sidebar.text(f"OS Platform:   {sys.platform.upper()}")
+st.sidebar.text(f"Thermal Temp:  {get_cpu_temp()}")
+# ==========================================
+# LAZY INITIALIZATION OF MEDIAPIPE MODELS
+# ==========================================
+@st.cache_resource
+def load_hands_model(min_det, min_track):
+    mp_hands = mp.solutions.hands
+    return mp_hands.Hands(
+        static_image_mode=False,
+        max_num_hands=1,
+        min_detection_confidence=min_det,
+        min_tracking_confidence=min_track
+    )
+hands = load_hands_model(min_detection_confidence, min_tracking_confidence)
+# ==========================================
+# TABS SETUP
+# ==========================================
+tab_canvas, tab_tutorial, tab_debug = st.tabs(["🎨 Live Air Doodle Canvas", "📖 Interactive Tutorial", "🛠️ Performance & Landmark Debugger"])
+# ==========================================
+# TAB 1: LIVE AIR DOODLE CANVAS
+# ==========================================
+with tab_canvas:
+    run_stream = st.checkbox("▶️ Start Webcam & Drawing Stream", value=False)
+    
+    # Grid Layout
+    col_feed, col_hud = st.columns([5, 3])
+    
+    with col_feed:
+        video_placeholder = st.empty()
+        
+    with col_hud:
+        st.markdown("### 📊 Performance HUD")
+        fps_placeholder = st.empty()
+        mode_placeholder = st.empty()
+        active_color_placeholder = st.empty()
+        
+        st.markdown("#### Gestures Legend")
+        st.info("""
+        * **1 Finger Up (Index):** Drawing Mode ✏️
+        * **2 Fingers Up (Index + Middle):** Selection Mode 🎯 *(Hover over top menu color to switch, hover over CLEAR to wipe)*
+        * **Closed Hand:** Paused Mode ⏸️
+        """)
+    # Setup or retrieve background capture thread
+    if run_stream:
+        # Check if camera index changed
+        if 'current_camera_idx' not in st.session_state:
+            st.session_state.current_camera_idx = camera_idx
+        if st.session_state.current_camera_idx != camera_idx or 'cam' not in st.session_state or st.session_state.cam is None:
+            if 'cam' in st.session_state and st.session_state.cam is not None:
+                st.session_state.cam.close()
+            st.session_state.cam = USBWebcamPipe(camera_idx=camera_idx, width=WIDTH, height=HEIGHT)
+            st.session_state.current_camera_idx = camera_idx
+        cam = st.session_state.cam
+        
+        # Timing trackers
+        fps_history = []
+        last_time = time.perf_counter()
+        
+        # Main run loop
+        while run_stream:
+            frame = cam.get_latest_frame()
+            if frame is None:
+                time.sleep(0.01)
+                continue
+            
+            # Mirror selfie view if enabled
+            if mirror_view:
+                frame = cv2.flip(frame, 1)
+            # Frame dimensions
+            h, w = frame.shape[:2]
+            # Draw top selection headers
+            step = w // 5
+            for i, col in enumerate(COLORS):
+                x_start, x_end = i * step, (i + 1) * step
+                if i == 4:
+                    cv2.rectangle(frame, (x_start, 0), (x_end, 50), (200, 200, 200), -1)
+                    cv2.putText(frame, "CLEAR", (x_start + 25, 33), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+                else:
+                    cv2.rectangle(frame, (x_start, 0), (x_end, 50), col, -1)
+                    # Border highlights active color
+                    if i == st.session_state.color_idx:
+                        cv2.rectangle(frame, (x_start, 0), (x_end, 50), (255, 255, 255), 4)
+            # Process hand detection
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb_frame)
+            current_mode = "Paused ⏸️"
+            
+            if results.multi_hand_landmarks:
+                for hand_landmarks in results.multi_hand_landmarks:
+                    lm = hand_landmarks.landmark
+                    
+                    # Convert normalized coords to pixels
+                    x1, y1 = int(lm[8].x * w), int(lm[8].y * h)   # Index fingertip
+                    x2, y2 = int(lm[12].x * w), int(lm[12].y * h) # Middle fingertip
+                    # Gestures detection flags
+                    index_up = lm[8].y < lm[6].y
+                    middle_up = lm[12].y < lm[10].y
+                    ring_up = lm[16].y < lm[14].y
+                    # Mode 2: Color Selection Mode (Index + Middle fingers are raised)
+                    if index_up and middle_up and not ring_up:
+                        current_mode = "Selecting Color/Action 🎯"
+                        st.session_state.xp, st.session_state.yp = 0, 0 # Reset continuous lines
+                        
+                        # Draw selection line/sight between fingertips
+                        cv2.line(frame, (x1, y1), (x2, y2), COLORS[st.session_state.color_idx], 3)
+                        cv2.circle(frame, (x1, y1), 8, COLORS[st.session_state.color_idx], -1)
+                        cv2.circle(frame, (x2, y2), 8, COLORS[st.session_state.color_idx], -1)
+                        
+                        # Selection menu hit box
+                        if y1 < 50:
+                            selected_box = x1 // step
+                            if selected_box == 4:
+                                st.session_state.canvas = np.zeros((HEIGHT, WIDTH, 3), dtype=np.uint8)
+                                st.session_state.xp, st.session_state.yp = 0, 0
+                            else:
+                                st.session_state.color_idx = selected_box
+                    # Mode 1: Drawing Mode (Only Index finger is raised)
+                    elif index_up and not middle_up:
+                        current_mode = "Drawing ✏️"
+                        
+                        # Draw pointer indicator
+                        cv2.circle(frame, (x1, y1), brush_size + 4, COLORS[st.session_state.color_idx], -1)
+                        cv2.circle(frame, (x1, y1), brush_size + 6, (255, 255, 255), 2)
+                        if st.session_state.xp == 0 and st.session_state.yp == 0:
+                            st.session_state.xp, st.session_state.yp = x1, y1
+                        # Glitch protector (avoids drawing long warp lines if hand tracker jumps)
+                        dist = math.hypot(x1 - st.session_state.xp, y1 - st.session_state.yp)
+                        if dist < 100:
+                            cv2.line(
+                                st.session_state.canvas, 
+                                (st.session_state.xp, st.session_state.yp), 
+                                (x1, y1), 
+                                COLORS[st.session_state.color_idx], 
+                                brush_size
+                            )
+                        st.session_state.xp, st.session_state.yp = x1, y1
+                    else:
+                        # Closed hand or other gesture; break drawing line
+                        st.session_state.xp, st.session_state.yp = 0, 0
+            else:
+                st.session_state.xp, st.session_state.yp = 0, 0
+            # Merge persistent drawing canvas with current frame (black pixels are transparent)
+            paint_mask = st.session_state.canvas.any(axis=-1)
+            frame[paint_mask] = st.session_state.canvas[paint_mask]
+            # Render frame
+            video_placeholder.image(frame, channels="BGR", use_container_width=True)
+            # Performance HUD metrics update
+            now = time.perf_counter()
+            fps = 1.0 / (now - last_time) if (now - last_time) > 0 else 0
+            last_time = now
+            fps_history.append(fps)
+            if len(fps_history) > 30:
+                fps_history.pop(0)
+            avg_fps = np.mean(fps_history)
+            fps_placeholder.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-label">Pipeline Frame Rate</div>
+                    <div class="metric-value">{avg_fps:.1f} FPS</div>
+                    <div class="metric-sub">MediaPipe + OpenCV Processing</div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            mode_placeholder.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-label">Active State</div>
+                    <div class="metric-value" style="color: #0984e3;">{current_mode}</div>
+                    <div class="metric-sub">Derived from finger landmark configuration</div>
+                </div>
+            """, unsafe_allow_html=True)
+            active_col = COLOR_NAMES[st.session_state.color_idx]
+            rgb_col = COLORS[st.session_state.color_idx]
+            active_color_placeholder.markdown(f"""
+                <div class="metric-container">
+                    <div class="metric-label">Brush Color</div>
+                    <div class="metric-value" style="color: rgb{rgb_col};">{active_col}</div>
+                    <div class="metric-sub">Brush Size: {brush_size} px</div>
+                </div>
+            """, unsafe_allow_html=True)
+            time.sleep(0.01)
+    else:
+        st.info("💡 Check the box above to start the webcam pipeline.")
+        # Cleanup camera thread on stop
+        if 'cam' in st.session_state and st.session_state.cam is not None:
+            st.session_state.cam.close()
+            st.session_state.cam = None
+# ==========================================
+# TAB 2: INTERACTIVE TUTORIAL
+# ==========================================
+with tab_tutorial:
+    st.markdown("### 📖 How to use the Edge AI Air Doodler")
+    
+    col_draw_tut, col_select_tut = st.columns(2)
+    
+    with col_draw_tut:
+        st.markdown("#### ✏️ Drawing Gesture")
+        st.write("""
+        1. Raise **only your Index finger** in front of the Logitech webcam.
+        2. Make sure your other fingers (especially the middle finger) are closed.
+        3. A colored circle indicator will hover on your index finger tip.
+        4. Move your hand to draw lines on the canvas.
+        """)
+        
+    with col_select_tut:
+        st.markdown("#### 🎯 Color Selection / Clear Gesture")
+        st.write("""
+        1. Raise **both your Index and Middle fingers** (like a peace sign).
+        2. A line connector (laser sight) will draw between your two fingertips.
+        3. Move this sight up into the top bar menu.
+        4. Hover over any color box to switch brush colors.
+        5. Hover over the **CLEAR** box in the top-right to wipe the canvas clean.
+        """)
+# ==========================================
+# TAB 3: DEBUGGER & METRICS
+# ==========================================
+with tab_debug:
+    st.markdown("### 🛠️ Real-time Landmark Diagnostic Dashboard")
+    st.write("Inspect real-time hand skeleton keypoints and pipeline confidence thresholds.")
+    
+    # Query static landmark labels mapping
+    st.markdown("#### MediaPipe Hand Landmarks Mapping Reference")
+    st.image("https://mediapipe.dev/images/mobile/hand_landmarks.png", caption="Standard 21 3D landmarks skeleton", width=400)
