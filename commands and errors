@@ -1,3 +1,2 @@
-pip uninstall -y opencv-python opencv-contrib-python opencv-python-headless opencv-contrib-python-headless
-# 10. Verify OpenCV imports correctly and links to Jetson's build
-python3 -c "import cv2; print('OpenCV Version:', cv2.__version__)"
+File "/home/gitam/mnt/storage/demo/hands/hands.py", line 9, in <module>
+    import mediapipe as mp
