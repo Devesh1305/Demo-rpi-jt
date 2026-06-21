@@ -1,1 +1,64 @@
-pip install face-recognition Jetson.GPIO
+import os
+import glob
+import face_recognition
+import pickle
+import cv2
+# Check for CUDA acceleration in dlib
+use_gpu = False
+try:
+    import dlib
+    if hasattr(dlib, 'DLIB_USE_CUDA') and dlib.DLIB_USE_CUDA:
+        use_gpu = True
+        print("[INFO] GPU Acceleration detected! Using CUDA-enabled dlib for training.")
+    else:
+        print("[INFO] No GPU Acceleration found in dlib. Running face detection on CPU.")
+except Exception as e:
+    print(f"[WARNING] Could not check dlib CUDA status: {e}. Defaulting to CPU.")
+# Set optimal model
+detection_model = "cnn" if use_gpu else "hog"
+print(f"[INFO] Face detection model set to: '{detection_model.upper()}'")
+print("[INFO] start processing faces...")
+# Find all .jpg, .jpeg, and .png images inside dataset folders
+imagePaths = []
+for ext in ('*.jpg', '*.jpeg', '*.png', '*.JPG', '*.JPEG', '*.PNG'):
+    imagePaths.extend(glob.glob(os.path.join("dataset", "**", ext), recursive=True))
+if len(imagePaths) == 0:
+    print("[ERROR] No training images found in 'dataset/'. Please run image_capture.py first.")
+    exit(1)
+knownEncodings = []
+knownNames = []
+for (i, imagePath) in enumerate(imagePaths):
+    print(f"[INFO] processing image {i + 1}/{len(imagePaths)}: {imagePath}")
+    
+    # Extract person name from folder structure
+    name = imagePath.split(os.path.sep)[-2]
+    
+    image = cv2.imread(imagePath)
+    if image is None:
+        print(f"[WARNING] Could not read image: {imagePath}")
+        continue
+        
+    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    
+    # Detect faces using selected model, with automatic fallback to HOG on GPU OOM
+    try:
+        boxes = face_recognition.face_locations(rgb, model=detection_model)
+    except RuntimeError as e:
+        if "out of memory" in str(e).lower() and detection_model == "cnn":
+            print("[WARNING] CUDA Out of Memory with CNN. Falling back to CPU 'HOG' model for this image.")
+            boxes = face_recognition.face_locations(rgb, model="hog")
+        else:
+            raise e
+    
+    # Compute the 128-d face encodings
+    encodings = face_recognition.face_encodings(rgb, boxes)
+    
+    for encoding in encodings:
+        knownEncodings.append(encoding)
+        knownNames.append(name)
+print("[INFO] serializing encodings...")
+data = {"encodings": knownEncodings, "names": knownNames}
+with open("encodings.pickle", "wb") as f:
+    f.write(pickle.dumps(data))
+print(f"[INFO] Training complete. Processed {len(imagePaths)} images.")
+print(f"[INFO] Encodings saved to 'encodings.pickle' (Total faces indexed: {len(knownNames)})")
