@@ -1,1 +1,1 @@
-sudo apt-get install -y libgl1-mesa-glx libglib2.0-0
+pip install https://huggingface.co/limegreenpeper1/PrecompiledWheels/resolve/main/mediapipe-0.10.26-cp310-cp310-linux_aarch64.whl
